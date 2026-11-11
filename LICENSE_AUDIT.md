@@ -5,6 +5,11 @@
 Signal Window's original code is licensed under **AGPL-3.0-only** starting
 with v0.1.1.
 
+**Non-profit use is fully open.** Personal use, study, research, non-profit
+community deployment, copying, modification, and distribution are not subject
+to additional restrictions. Commercial use is still permitted by AGPL-3.0,
+provided its source-offer obligations are met.
+
 ## Why AGPL-3.0 instead of GPL-3.0
 
 This project is a network service:
