@@ -17,3 +17,5 @@ No keys are provided by design.
 Gateway Token: empty = local no-login mode; set a random value for remote use.
 OneBot accessToken: empty if AstrBot has no ws_reverse_token; otherwise use the same value as AstrBot.
 Never enter placeholder strings such as <GATEWAY_TOKEN>.
+
+Original code license: AGPL-3.0-only (v0.1.1+). See LICENSE.

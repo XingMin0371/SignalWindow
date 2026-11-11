@@ -14,7 +14,28 @@
 
 这个项目主要给 0 基础的小白提供框架方向，让原本桥接到 QQ 的 AstrBot 鱼不再依赖 QQ，而是在本地“复活”。项目不承诺持续更新，其他人可以自由增减和继续更新。
 
-### 给 DSH 的阅读顺序
+### 许可证与源码
+
+本项目原创代码采用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**。
+
+原因：
+
+```text
+这是网络服务，GPL 只约束分发，不覆盖纯网络使用；
+AGPL 要求修改版在向网络用户提供服务时也提供对应源码；
+依赖主要是 MIT/Apache-2.0，与 AGPL-3.0 兼容；
+本次未发现复制 GPL/AGPL 代码。
+```
+
+源码地址：
+
+https://github.com/XingMin0371/SignalWindow
+
+运行修改版并向网络用户提供服务时，必须按 AGPL-3.0 第 13 条提供对应源码。此前发布的 v0.1.0 仍按其当时的 MIT 许可证授权，不能追溯撤销；v0.1.1 起适用 AGPL-3.0-only。
+
+完整许可证见 `LICENSE`，依赖许可见 `THIRD_PARTY_NOTICES.md`，选择理由见 `LICENSE_AUDIT.md`。
+
+## 给 DSH 的阅读顺序
 
 ```text
 README.md
@@ -23,6 +44,7 @@ README.md
 → PRIVACY.md
 → LOCAL_BUILD.md
 → DEPLOY.md
+→ LICENSE_AUDIT.md
 ```
 
 DSH 可以直接按照上述文档执行检查、安装、构建和启动；遇到平台差异时，优先保留相对路径、环境变量和本机回环监听，不要写死盘符或公网地址。

@@ -6,6 +6,8 @@ import { App as AntApp, Button, ConfigProvider, Form, Input, Layout, Menu, Modal
 import { ApiOutlined, DashboardOutlined, NodeIndexOutlined, SettingOutlined, BugOutlined, MessageOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { api } from "./api";
 import type { Config } from "./types";
+const SOURCE_URL = "https://github.com/XingMin0371/SignalWindow";
+
 const ChatPage = lazy(() => import("./pages/ChatPage"));
 const ProfilesPage = lazy(() => import("./pages/ProfilesPage"));
 const TopologyPage = lazy(() => import("./pages/TopologyPage"));
@@ -55,6 +57,10 @@ function Shell({ config, reload }: { config: Config; reload: () => Promise<void>
             <Tag bordered={false} className="status-tag">
               {config.authRequired ? "SECURED" : "LOCAL"}
             </Tag>
+            <a className="source-link" href={SOURCE_URL} target="_blank" rel="noreferrer"
+               title="AGPL-3.0-only · 无担保 · 源代码">
+              AGPL-3.0 · 源码
+            </a>
           </Space>
         </Header>
         <Content className="app-content">
@@ -119,6 +125,10 @@ export default function App() {
               <div className="eyebrow">PRIVATE SIGNAL / AUTHENTICATION</div>
               <Typography.Title level={2}>进入控制室</Typography.Title>
               <Typography.Paragraph type="secondary">输入网关部署时设置的 Token。凭据只用于建立 HttpOnly 会话，不写入 localStorage。</Typography.Paragraph>
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+                AGPL-3.0-only · 无担保 ·{" "}
+                <a href={SOURCE_URL} target="_blank" rel="noreferrer">获取源代码</a>
+              </Typography.Paragraph>
               <Form
                 layout="vertical"
                 onFinish={async ({ token }) => {

@@ -122,3 +122,20 @@ Docker Desktop 自身需要虚拟化/服务权限
 ```
 
 如果所在地区或平台不允许此类本地桥接、数据导出或自动化，请停止使用。
+
+## 许可证与网络源码义务
+
+本项目原创代码从 v0.1.1 起采用 **AGPL-3.0-only**。
+
+```text
+自用、修改、研究：允许
+分发：需遵守 AGPL-3.0
+作为网络服务提供修改版：必须向网络用户提供 Corresponding Source
+商业使用：允许，但不能借此绕过 AGPL 的源码义务
+```
+
+源码入口：
+
+https://github.com/XingMin0371/SignalWindow
+
+v0.1.0 仍按 MIT 授权，不能追溯撤销。完整许可证见 `LICENSE`，选择理由见 `LICENSE_AUDIT.md`，依赖许可见 `THIRD_PARTY_NOTICES.md`。
