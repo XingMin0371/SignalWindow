@@ -18,6 +18,8 @@
 
 本项目原创代码采用 **GNU Affero General Public License v3.0 only（AGPL-3.0-only）**。
 
+**对于非盈利目的完全开放。** 个人使用、学习、研究、非营利社区部署、复制、修改和分发均不受额外限制；商业使用仍被 AGPL-3.0 允许，但必须遵守其源码提供义务。
+
 原因：
 
 ```text
@@ -31,7 +33,7 @@ AGPL 要求修改版在向网络用户提供服务时也提供对应源码；
 
 https://github.com/XingMin0371/SignalWindow
 
-运行修改版并向网络用户提供服务时，必须按 AGPL-3.0 第 13 条提供对应源码。此前发布的 v0.1.0 仍按其当时的 MIT 许可证授权，不能追溯撤销；v0.1.1 起适用 AGPL-3.0-only。
+运行修改版并向网络用户提供服务时，必须按 AGPL-3.0 第 13 条提供对应源码。旧 MIT 版 v0.1.0 已下架；已经分发的旧副本仍受其当时的 MIT 许可证约束。v0.1.1 起适用 AGPL-3.0-only。
 
 完整许可证见 `LICENSE`，依赖许可见 `THIRD_PARTY_NOTICES.md`，选择理由见 `LICENSE_AUDIT.md`。
 

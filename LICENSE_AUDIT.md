@@ -38,8 +38,9 @@ again; a non-permissive exception must not be added to that code.
 
 ## Prior versions
 
-v0.1.0 was published under MIT. Those copies remain MIT and cannot be
-retroactively relicensed. v0.1.1 and later are AGPL-3.0-only.
+The old v0.1.0 MIT release has been removed. Copies already distributed
+remain under MIT and cannot be retroactively relicensed. v0.1.1 and later
+are AGPL-3.0-only.
 
 ## Compliance note
 
