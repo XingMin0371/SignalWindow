@@ -1,0 +1,6 @@
+# Replace window.example.com with your domain.
+# Caddy automatically provisions HTTPS.
+window.example.com {
+    encode zstd gzip
+    reverse_proxy window:8787
+}

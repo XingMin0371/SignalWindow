@@ -1,0 +1,499 @@
+import http from "node:http";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { WebSocketServer, WebSocket } from "ws";
+import { OneBotClient } from "./onebot.mjs";
+import { store } from "./store.mjs";
+import { sanitizeParts } from "./message.mjs";
+import { loadProfiles, normalizeProfile, saveProfiles } from "./upstreams.mjs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
+const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || "127.0.0.1";
+const TOKEN = process.env.GATEWAY_TOKEN || "";
+const SESSION_COOKIE = "slw_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const sessions = new Map();
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean);
+const MAX_CLIENTS = Number(process.env.MAX_CLIENTS || 100);
+const MAX_CLIENTS_PER_IP = Number(process.env.MAX_CLIENTS_PER_IP || 20);
+
+let profiles = await loadProfiles();
+const profileMap = new Map();
+const onebots = new Map();
+const clients = new Set();
+
+function publicProfile(profile) {
+  return {
+    id: profile.id,
+    label: profile.label,
+    selfId: profile.selfId,
+    privateUserId: profile.privateUserId,
+    privateUserIds: profile.privateUserIds,
+    groupId: profile.groupId,
+    groupIds: profile.groupIds,
+  };
+}
+function broadcast(payload) {
+  const data = JSON.stringify(payload);
+  for (const ws of clients) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > 8 * 1024 * 1024) { ws.terminate(); continue; }
+    if (ws.bufferedAmount < 1024 * 1024) ws.send(data);
+  }
+}
+function broadcastProfiles() {
+  broadcast({
+    type: "profiles",
+    profiles: [...profileMap.values()].map(publicProfile),
+    onebots: Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])),
+  });
+}
+function startClient(profile) {
+  onebots.get(profile.id)?.stop();
+  const client = new OneBotClient({
+    ...profile,
+    onReply: async ({ profile: profileId, conversation, targetId, parts }) => {
+      const message = await store.add({
+        profile: profileId,
+        conversation,
+        targetId,
+        role: "assistant",
+        parts,
+        source: "onebot",
+      });
+      broadcast({ type: "message", message });
+      return message;
+    },
+  });
+  client.on("status", (status) => broadcast({
+    type: "status",
+    profile: profile.id,
+    label: profile.label,
+    onebot: status,
+  }));
+  onebots.set(profile.id, client);
+  client.start();
+}
+function addProfile(raw) {
+  const profile = normalizeProfile(raw, profileMap.size);
+  profileMap.set(profile.id, profile);
+  profiles = [...profileMap.values()];
+  startClient(profile);
+  return profile;
+}
+function targetsFor(profile, conversation) {
+  return conversation === "group" ? profile.groupIds || [] : profile.privateUserIds || [];
+}
+function resolveTarget(profile, conversation, requested) {
+  const allowed = targetsFor(profile, conversation);
+  const target = String(requested || allowed[0] || "");
+  return allowed.includes(target) ? target : "";
+}
+for (const profile of profiles) {
+  profileMap.set(profile.id, profile);
+  startClient(profile);
+}
+
+const authFailures = new Map();
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+function rateLimited(req) {
+  const key = req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const recent = (authFailures.get(key) || []).filter((time) => now - time < 60_000);
+  if (recent.length >= 10) { authFailures.set(key, recent); return true; }
+  authFailures.set(key, recent);
+  return false;
+}
+function noteAuthFailure(req) {
+  const key = req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const recent = (authFailures.get(key) || []).filter((time) => now - time < 60_000);
+  recent.push(now);
+  authFailures.set(key, recent);
+}
+function cookieValue(req, name) {
+  const raw = String(req.headers.cookie || "");
+  for (const part of raw.split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    if (part.slice(0, index).trim() === name) return decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return "";
+}
+function createSession(req, res) {
+  const id = crypto.randomBytes(32).toString("base64url");
+  sessions.set(id, Date.now() + SESSION_TTL_MS);
+  const secure = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
+}
+function clearSession(req, res) {
+  const id = cookieValue(req, SESSION_COOKIE);
+  if (id) sessions.delete(id);
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`);
+}
+function sessionValid(req) {
+  const id = cookieValue(req, SESSION_COOKIE);
+  if (!id) return false;
+  const expires = sessions.get(id);
+  if (!expires || expires < Date.now()) { sessions.delete(id); return false; }
+  return true;
+}
+function authorized(req) {
+  if (!TOKEN) return true;
+  if (sessionValid(req)) return true;
+  const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
+  return safeEqual(supplied, TOKEN);
+}
+function originAllowed(req) {
+  const origin = String(req.headers.origin || "");
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.length) return ALLOWED_ORIGINS.includes(origin);
+  try { return new URL(origin).host === String(req.headers.host || ""); } catch { return false; }
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, expires] of sessions) if (expires < now) sessions.delete(id);
+  for (const [key, times] of authFailures) if (!times.some((time) => now - time < 60_000)) authFailures.delete(key);
+}, 10 * 60_000).unref();
+async function readJson(req) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 128 * 1024) throw new Error("request too large");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://localhost");
+  if (url.pathname.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  if (String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/session") {
+    try {
+      const body = await readJson(req);
+      if (TOKEN && !safeEqual(String(body.token || ""), TOKEN)) {
+        if (rateLimited(req)) {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "too many attempts" }));
+          return;
+        }
+        noteAuthFailure(req);
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      createSession(req, res);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+  if (req.method === "DELETE" && url.pathname === "/api/session") {
+    clearSession(req, res);
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/profiles/test") {
+    try {
+      const body = await readJson(req);
+      const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || body.token || "";
+      if (TOKEN && !authorized(req) && !safeEqual(supplied, TOKEN)) {
+        if (rateLimited(req)) {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "too many attempts" }));
+          return;
+        }
+        noteAuthFailure(req);
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const profile = normalizeProfile(body.profile || body, 0);
+      const result = await new Promise((resolve) => {
+        const socket = new WebSocket(profile.wsUrl, {
+          headers: {
+            "X-Self-ID": profile.selfId,
+            "X-Client-Role": "Universal",
+            ...(profile.accessToken ? { Authorization: `Bearer ${profile.accessToken}` } : {}),
+          },
+        });
+        const timer = setTimeout(() => {
+          socket.close();
+          resolve({ ok: false, detail: "timeout" });
+        }, 6000);
+        socket.on("open", () => {
+          clearTimeout(timer);
+          socket.close();
+          resolve({ ok: true, detail: "connected" });
+        });
+        socket.on("error", (error) => {
+          clearTimeout(timer);
+          resolve({ ok: false, detail: error.message });
+        });
+      });
+      res.writeHead(result.ok ? 200 : 502, { "content-type": "application/json" });
+      res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, detail: error.message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/profiles") {
+    try {
+      const body = await readJson(req);
+      const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || body.token || "";
+      if (TOKEN && !authorized(req) && !safeEqual(supplied, TOKEN)) {
+        if (rateLimited(req)) {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "too many attempts" }));
+          return;
+        }
+        noteAuthFailure(req);
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const profile = addProfile(body.profile || body);
+      await saveProfiles([...profileMap.values()]);
+      broadcastProfiles();
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, profile: publicProfile(profile) }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname.startsWith("/api/profiles/")) {
+    if (!authorized(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const id = decodeURIComponent(url.pathname.slice("/api/profiles/".length));
+    const profile = profileMap.get(id);
+    if (!profile) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(profile));
+    return;
+  }
+
+  if (url.pathname === "/api/health") {
+    const visible = !TOKEN || authorized(req);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      ok: true,
+      onebot: visible && [...onebots.values()].some((client) => client.connected),
+      onebots: visible ? Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])) : {},
+      service: "signal-window",
+    }));
+    return;
+  }
+  if (url.pathname === "/api/config") {
+    const authenticated = !TOKEN || authorized(req);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      profiles: authenticated ? [...profileMap.values()].map(publicProfile) : [],
+      setupRequired: authenticated && profiles.length === 0,
+      authRequired: Boolean(TOKEN),
+      authenticated,
+    }));
+    return;
+  }
+  if (url.pathname === "/api/messages") {
+    if (!authorized(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const requested = url.searchParams.get("profile");
+    const profile = profileMap.has(requested) ? profileMap.get(requested) : profiles[0];
+    const conversation = url.searchParams.get("conversation") === "group" ? "group" : "private";
+    const targetId = profile ? resolveTarget(profile, conversation, url.searchParams.get("targetId")) : "";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(profile && targetId ? store.list(profile.id, conversation, targetId, targetsFor(profile, conversation)[0]) : []));
+    return;
+  }
+
+  let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+  filePath = path.resolve(PUBLIC_DIR, `.${filePath}`);
+  const relative = path.relative(PUBLIC_DIR, filePath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    res.writeHead(403); res.end(); return;
+  }
+  try {
+    const body = await fs.readFile(filePath);
+    const ext = path.extname(filePath);
+    const types = {
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".css": "text/css; charset=utf-8",
+      ".json": "application/json; charset=utf-8",
+      ".webmanifest": "application/manifest+json; charset=utf-8",
+      ".svg": "image/svg+xml",
+      ".png": "image/png",
+    };
+    const immutable = filePath.includes(`${path.sep}assets${path.sep}`);
+    res.writeHead(200, {
+      "content-type": types[ext] || "application/octet-stream",
+      "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    });
+    res.end(body);
+  } catch {
+    res.writeHead(404); res.end("not found");
+  }
+});
+server.headersTimeout = 10_000;
+server.requestTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 100;
+server.on("clientError", (error, socket) => {
+  if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+  else socket.destroy();
+});
+
+const wss = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024, handleProtocols: (protocols) => { const list = protocols instanceof Set ? [...protocols] : protocols; return list.includes("signal-window") ? "signal-window" : false; } });
+function sendHistory(ws, profile, conversation, targetId) {
+  const current = profileMap.get(profile);
+  if (!current) return;
+  const target = resolveTarget(current, conversation, targetId);
+  if (!target) return;
+  ws.send(JSON.stringify({
+    type: "history",
+    profile,
+    conversation,
+    targetId: target,
+    messages: store.list(profile, conversation, target, targetsFor(current, conversation)[0]),
+  }));
+}
+server.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url, "http://localhost");
+  const ip = req.socket.remoteAddress || "unknown";
+  const ipCount = [...clients].filter((client) => client.remoteAddress === ip).length;
+  if (clients.size >= MAX_CLIENTS || ipCount >= MAX_CLIENTS_PER_IP || !originAllowed(req)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  const protocols = String(req.headers["sec-websocket-protocol"] || "").split(",").map((v) => v.trim());
+  const protocolToken = protocols.find((value) => value.startsWith("auth."))?.slice(5) || "";
+  let decodedProtocolToken = "";
+  try { decodedProtocolToken = protocolToken ? Buffer.from(protocolToken, "base64url").toString("utf8") : ""; } catch {}
+  const supplied = decodedProtocolToken || (process.env.ALLOW_QUERY_TOKEN === "1" ? url.searchParams.get("token") || "" : "");
+  if (url.pathname !== "/ws" || (TOKEN && !authorized(req) && !safeEqual(supplied, TOKEN))) {
+    if (TOKEN) noteAuthFailure(req);
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    clients.add(ws);
+    ws.remoteAddress = ip;
+    ws.messageWindow = [];
+    ws.on("close", () => clients.delete(ws));
+    ws.on("message", async (raw) => {
+      const now = Date.now();
+      ws.messageWindow = ws.messageWindow.filter((time) => now - time < 10_000);
+      if (ws.messageWindow.length >= 60) {
+        ws.close(1008, "rate limit");
+        return;
+      }
+      ws.messageWindow.push(now);
+      let payload;
+      try { payload = JSON.parse(raw.toString()); } catch { return; }
+      if (payload.type === "history") {
+        const profile = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
+        if (profile) sendHistory(ws, profile, payload.conversation === "group" ? "group" : "private", payload.targetId);
+        return;
+      }
+      if (payload.type !== "send") return;
+      const profileId = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
+      if (!profileId) {
+        ws.send(JSON.stringify({ type: "error", detail: "尚未配置 AstrBot" }));
+        return;
+      }
+      const parts = sanitizeParts(
+        Array.isArray(payload.parts)
+          ? payload.parts
+          : [{ type: "text", text: String(payload.text ?? "") }],
+      );
+      if (!parts.length) {
+        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: "empty message" }));
+        return;
+      }
+      const conversation = payload.conversation === "group" ? "group" : "private";
+      const current = profileMap.get(profileId);
+      const targetId = resolveTarget(current, conversation, payload.targetId);
+      if (!targetId) {
+        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: "会话对象未配置" }));
+        return;
+      }
+      const message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
+      broadcast({ type: "message", message });
+      try {
+        await onebots.get(profileId).send({ conversation, targetId, parts });
+      } catch (error) {
+        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: error.message }));
+      }
+    });
+    ws.send(JSON.stringify({
+      type: "hello",
+      profiles: [...profileMap.values()].map(publicProfile),
+      onebots: Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])),
+    }));
+    for (const profile of profiles) {
+      for (const conversation of ["private", "group"]) {
+        for (const targetId of targetsFor(profile, conversation)) {
+          sendHistory(ws, profile.id, conversation, targetId);
+        }
+      }
+    }
+  });
+});
+
+await store.init();
+server.listen(PORT, HOST, () => {
+  console.log(`signal-window gateway http://${HOST}:${PORT}`);
+  console.log(`profiles ${profiles.map((p) => `${p.id}->${p.wsUrl}`).join(", ") || "none; waiting for setup"}`);
+});
+
+async function shutdown() {
+  for (const client of onebots.values()) client.stop();
+  await store.flush().catch((error) => console.error("store flush failed", error));
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

@@ -1,0 +1,14 @@
+Signal Window source package
+
+This archive intentionally contains no compiled/minified frontend bundles.
+Build the web client first:
+
+  cd apps/web
+  pnpm install
+  pnpm run build
+  cd ../..
+  pnpm install
+  node scripts/setup.mjs
+  pnpm start
+
+Or use Docker, which builds the web client in a multi-stage build.

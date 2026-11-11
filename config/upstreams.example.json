@@ -1,0 +1,13 @@
+{
+  "profiles": [
+    {
+      "id": "main",
+      "label": "AstrBot",
+      "wsUrl": "ws://127.0.0.1:6199/ws",
+      "accessToken": "",
+      "selfId": "1000000001",
+      "privateUserId": "1000000002",
+      "groupId": ""
+    }
+  ]
+}

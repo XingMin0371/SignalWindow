@@ -1,0 +1,15 @@
+{
+  "name": "signal-window",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env services/gateway/src/index.mjs",
+    "mock": "node scripts/mock-astr.mjs",
+    "dev": "node --env-file-if-exists=.env --watch services/gateway/src/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

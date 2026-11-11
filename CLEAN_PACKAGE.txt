@@ -1,0 +1,19 @@
+Signal Window clean source package
+
+No production QQ numbers, personal names, access tokens, SSH keys or server IP are included.
+Fill config/upstreams.json from config/upstreams.example.json.
+
+Start:
+  pnpm install
+  pnpm start
+
+Web build:
+  cd apps/web
+  pnpm install
+  pnpm run build
+
+No keys are provided by design.
+
+Gateway Token: empty = local no-login mode; set a random value for remote use.
+OneBot accessToken: empty if AstrBot has no ws_reverse_token; otherwise use the same value as AstrBot.
+Never enter placeholder strings such as <GATEWAY_TOKEN>.
