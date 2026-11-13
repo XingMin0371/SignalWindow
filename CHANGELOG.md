@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.4 - 2026-11-13
+
+### 低风险整合
+
+- gap 事件改为当前会话历史重同步，不再刷新页面；输入草稿用 sessionStorage 恢复。
+- Origin 校验支持 `REQUIRE_ORIGIN=1`，默认保留无 Origin 的 CLI/WebView 兼容。
+- 可信代理 IP 归一化、IPv4 CIDR 支持和启动告警。
+- DATA_DIR 单实例锁，处理容器 PID1 复用导致的陈旧锁。
+- 致命异常按状态损坏/软错误窗口分级。
+- 前端常驻 √ 分块增量高度索引，append/prepend/update 不再全量重建。
+- Settings 保存改为单次 `PUT /api/profiles`，全部校验、一次落盘、统一重连。
+- 静态资源增加 ETag/304；会话登录轮换旧 ID，支持 `all=1` 全端吊销。
+- 空 Origin、数字归一化、行高 NaN/越界兜底。
+
+### 仍未切换
+
+- NDJSON 仍是默认存储；SQLite WAL 未启用。
+- 消息数组不可变追加仍会复制当前会话数组。
+- CSP 的 ws/https 范围、文件魔数校验、Docker 基础镜像摘要、CI/SAST 未补齐。
+
 ## 0.2.3 - 2026-11-13
 
 ### A 章 P0 / 性能

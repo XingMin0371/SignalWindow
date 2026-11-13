@@ -42,3 +42,17 @@
 - N-10：快照 fsync，Windows rename 重试；trim 仍是数组移动。
 - N-11：运行镜像只包含 dist，基础镜像摘要仍未固定。
 - v0.2.3：增量高度索引完成；仍未清零 profile 批量保存、CSP 宽范围、Cookie 全端吊销、CI/SAST。
+
+## v0.2.4 低风险整合
+
+- A-1：gap 历史重同步、草稿恢复，不再 reload。
+- A-2：`REQUIRE_ORIGIN` 可选强制，默认兼容无 Origin 客户端。
+- A-3：代理 IP 归一化/CIDR/启动告警。
+- A-4：DATA_DIR 单实例锁，含容器 PID1 陈旧锁处理。
+- A-5：致命异常软硬分级。
+- A-7：gap 仅重同步当前会话。
+- B.2：常驻 SqrtHeightIndex，随机等价测试通过。
+- G.4：profile 保存改为 PUT 单事务校验与一次写盘。
+- 静态 ETag/304、会话轮换/全端吊销。
+
+未切换：SQLite 后端、消息外部 store、CSP 收紧、文件魔数、CI/SAST。

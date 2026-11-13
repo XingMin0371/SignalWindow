@@ -34,6 +34,12 @@ export const api = {
       headers: headers(true),
       body: JSON.stringify({ profile }),
     }),
+  replaceProfiles: (profiles: Array<Partial<Profile> & { accessToken?: string; wsUrl: string }>) =>
+    request<{ ok: boolean; profiles: Profile[] }>("/api/profiles", {
+      method: "PUT",
+      headers: headers(true),
+      body: JSON.stringify({ profiles }),
+    }),
   addProfile: (profile: Partial<Profile> & { accessToken?: string; wsUrl: string }) =>
     request<{ ok: boolean; profile: Profile }>("/api/profiles", {
       method: "POST",

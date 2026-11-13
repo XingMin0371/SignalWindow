@@ -110,6 +110,31 @@ function addProfile(raw) {
   startClient(profile);
   return profile;
 }
+async function replaceProfiles(rawProfiles) {
+  if (!Array.isArray(rawProfiles)) throw new Error("profiles 必须是数组");
+  const ids = new Set();
+  const next = rawProfiles.map((raw, index) => {
+    const existing = profileMap.get(String(raw?.id || ""));
+    const sameEndpoint = existing && String(raw?.wsUrl || "") === String(existing.wsUrl || "");
+    const input = existing && sameEndpoint && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
+    const profile = normalizeProfile(input, index);
+    if (ids.has(profile.id)) throw new Error(`重复的 profile id: ${profile.id}`);
+    ids.add(profile.id);
+    return profile;
+  });
+  await saveProfiles(next);
+  for (const client of onebots.values()) client.stop();
+  onebots.clear();
+  profileMap.clear();
+  for (const profile of next) {
+    profileMap.set(profile.id, profile);
+    startClient(profile);
+  }
+  profiles = [...next];
+  broadcastProfiles();
+  return profiles;
+}
+
 function targetsFor(profile, conversation) {
   return conversation === "group" ? profile.groupIds || [] : profile.privateUserIds || [];
 }
@@ -204,6 +229,8 @@ function cookieValue(req, name) {
   return "";
 }
 function createSession(req, res) {
+  const previous = cookieValue(req, SESSION_COOKIE);
+  if (previous) sessions.delete(previous);
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, Date.now() + SESSION_TTL_MS);
   const secure = trustedProxy(req) && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
@@ -296,6 +323,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === "DELETE" && url.pathname === "/api/session") {
+    if (authorized(req) && url.searchParams.get("all") === "1") {
+      sessions.clear();
+    }
     clearSession(req, res);
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify({ ok: true }));
@@ -354,6 +384,25 @@ const server = http.createServer(async (req, res) => {
       console.error("[profile-test]", error.message);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: false, detail: "invalid profile" }));
+    }
+    return;
+  }
+
+  if (req.method === "PUT" && url.pathname === "/api/profiles") {
+    try {
+      const body = await readJson(req);
+      const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || body.token || "";
+      if (TOKEN && !authorized(req) && !safeEqual(supplied, TOKEN)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const next = await replaceProfiles(body.profiles);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, profiles: next.map(publicProfile) }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
     }
     return;
   }
@@ -545,6 +594,12 @@ const server = http.createServer(async (req, res) => {
     if (!stat.isFile()) {
       res.writeHead(404); res.end("not found"); return;
     }
+    const etag = `W/"${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    headers.etag = etag;
+    headers.vary = "Accept-Encoding";
+    if (String(req.headers["if-none-match"] || "") === etag) {
+      res.writeHead(304, headers); res.end(); return;
+    }
     const accepted = String(req.headers["accept-encoding"] || "");
     const encoding = [".html", ".js", ".css", ".json", ".svg", ".webmanifest"].includes(ext) && stat.size >= 1024
       ? (/(^|,)\s*br\b/i.test(accepted) ? "br" : /(^|,)\s*gzip\b/i.test(accepted) ? "gzip" : "")
@@ -564,10 +619,7 @@ const server = http.createServer(async (req, res) => {
       if (staticCache.size > 128) staticCache.clear();
       staticCache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, body });
     }
-    if (encoding) {
-      headers["content-encoding"] = encoding;
-      headers["vary"] = "Accept-Encoding";
-    }
+    if (encoding) headers["content-encoding"] = encoding;
     res.writeHead(200, headers);
     res.end(body);
   } catch {

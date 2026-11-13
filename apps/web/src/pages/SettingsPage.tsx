@@ -112,9 +112,7 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
     try {
       const parsed = JSON.parse(value);
       if (!Array.isArray(parsed.profiles)) throw new Error("profiles 必须是数组");
-      for (const profile of parsed.profiles) {
-        await api.addProfile(profile);
-      }
+      await api.replaceProfiles(parsed.profiles);
       message.success("配置已保存到网关");
     } catch (error) {
       message.error(String(error));

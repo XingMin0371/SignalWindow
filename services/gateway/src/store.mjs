@@ -193,7 +193,7 @@ class Store {
         let owner = 0;
         try { owner = Number((await fs.readFile(LOCK_FILE, "utf8")).trim()); } catch {}
         let alive = false;
-        if (owner > 0) {
+        if (owner > 0 && owner !== process.pid) {
           try { process.kill(owner, 0); alive = true; } catch (probe) { alive = probe.code === "EPERM"; }
         }
         if (alive) throw new Error("another gateway instance is using DATA_DIR");
