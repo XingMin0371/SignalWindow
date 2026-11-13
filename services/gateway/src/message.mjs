@@ -8,7 +8,11 @@ export function safeUrl(url, kind) {
   const value = String(url || "").trim();
   if (!value || value.length > 7_000_000) return "";
   if (/^javascript:|^vbscript:|^data:text\/html|^data:image\/svg/i.test(value)) return "";
-  if (/^https?:\/\//i.test(value)) return value;
+  if (/^https?:\/\//i.test(value)) {
+    const allowedHosts = String(process.env.MEDIA_HOST_ALLOWLIST || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+    if (!allowedHosts.length) return value;
+    try { return allowedHosts.includes(new URL(value).hostname.toLowerCase()) ? value : ""; } catch { return ""; }
+  }
   if (kind === "image" && /^data:image\/(?:png|jpe?g|gif|webp|bmp)[;,]|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
   if (kind === "file" && /^data:(?:application\/(?:pdf|json|zip|octet-stream)|audio\/|video\/|font\/|image\/(?!svg)|text\/(?:plain|csv))|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
   if ((kind === "audio" || kind === "video") && /^data:(?:audio|video)\//i.test(value)) return value;
