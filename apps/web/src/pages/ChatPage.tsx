@@ -2,8 +2,9 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { Badge, Button, Empty, Image, Input, Select, Space, Spin, Tag, Typography } from "antd";
 import { FileAddOutlined, PictureOutlined, SendOutlined } from "@ant-design/icons";
 import type { Message, MessagePart, Profile } from "../types";
-import { safeGet } from "../storage";
+import { safeGet, safeSet } from "../storage";
 import { BackgroundSurface, rememberChatAspect } from "../appearance";
+import { SqrtHeightIndex } from "../heightIndex";
 
 type Conversation = "private" | "group";
 type Target = { key: string; conversation: Conversation; targetId: string; label: string };
@@ -19,7 +20,6 @@ const PAGE_SIZE = 30;
 const ROW_HEIGHT = 88;
 const OVERSCAN = 6;
 const AUTO_LOAD_THRESHOLD = 96;
-const HEIGHT_BLOCK = 64;
 const timeFormatCache = new Map<string, string>();
 
 function targetsFor(profile: Profile | undefined): Target[] {
@@ -68,6 +68,9 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
   const heightsRef = useRef(new Map<string, number>());
   const [measureVersion, setMeasureVersion] = useState(0);
   const loadingOlderRef = useRef(false);
+  const heightIndexRef = useRef(new SqrtHeightIndex());
+  const indexedKeyRef = useRef("");
+  const indexedIdsRef = useRef<string[]>([]);
   const autoLoadTimerRef = useRef(0);
   const autoLoadBlockedUntilRef = useRef(0);
   const prependAnchorRef = useRef<{ id: string; top: number } | null>(null);
@@ -80,6 +83,8 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
   const scrollRafRef = useRef(0);
   const incomingRef = useRef<Message[]>([]);
   const incomingRafRef = useRef(0);
+  const activeRef = useRef<{ profileId: string; target: Target | undefined }>({ profileId: "", target: undefined });
+  const draftKeyRef = useRef("");
 
   useEffect(() => () => {
     if (autoLoadTimerRef.current) window.clearTimeout(autoLoadTimerRef.current);
@@ -94,6 +99,21 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     if (!targets.some((target) => target.key === targetKey)) setTargetKey(targets[0]?.key || "");
   }, [targets, targetKey]);
   const target = targets.find((item) => item.key === targetKey) || targets[0];
+
+  useEffect(() => {
+    activeRef.current = { profileId, target };
+  }, [profileId, target]);
+
+  const draftKey = target ? `signal_draft:${profileId}:${target.conversation}:${target.targetId}` : "";
+  useEffect(() => {
+    if (!draftKey) return;
+    if (draftKeyRef.current !== draftKey) {
+      draftKeyRef.current = draftKey;
+      setText(safeGet(draftKey) || "");
+      return;
+    }
+    safeSet(draftKey, text);
+  }, [draftKey, text]);
 
   useEffect(() => {
     const updateSetting = () => setEnterToSend(safeGet("signal_enter_send") !== "0");
@@ -180,8 +200,22 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
           }
         }
         if (payload.type === "gap") {
+          const active = activeRef.current;
+          const socket = wsRef.current;
           setSendError("实时连接落后，正在重新同步");
-          window.setTimeout(() => window.location.reload(), 800);
+          if (active.target && socket?.readyState === WebSocket.OPEN) {
+            setHistoryLoading(true);
+            setHasMore(true);
+            socket.send(JSON.stringify({
+              type: "history",
+              profile: active.profileId,
+              conversation: active.target.conversation,
+              targetId: active.target.targetId,
+              limit: PAGE_SIZE,
+              requestId: String(++historySeq.current),
+            }));
+          }
+          return;
         }
         if (payload.type === "ack") {
           const pending = pendingRef.current;
@@ -285,18 +319,44 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     }
   }, [visible.length, key, measureVersion]);
 
-  // Block decomposition keeps a single row-height update O(HEIGHT_BLOCK)
-  // and prefix/position lookup O(number of blocks), instead of rebuilding
-  // an O(n) offsets array on every measurement.
-  const heightIndex = useMemo(() => new HeightIndex(visible, heightsRef.current), [visible]);
-  const blockTops = useMemo(() => heightIndex.blockTops(), [heightIndex, measureVersion]);
+  // Incremental sqrt index: append/prepend/update do not rebuild the whole
+  // visible array; block metadata is the only O(blocks) part.
+  const heightIndex = useMemo(() => {
+    const index = heightIndexRef.current;
+    const ids = visible.map((message) => message.id);
+    const known = indexedIdsRef.current;
+    if (indexedKeyRef.current !== key || ids.length < known.length) {
+      index.reset();
+      for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
+    } else if (ids.length > known.length) {
+      const prefixSame = known.every((id, position) => ids[position] === id);
+      const suffixSame = known.every((id, position) => ids[position + ids.length - known.length] === id);
+      if (prefixSame) {
+        for (let position = known.length; position < visible.length; position += 1) {
+          index.append(visible[position].id, heightsRef.current.get(visible[position].id) || ROW_HEIGHT);
+        }
+      } else if (suffixSame) {
+        index.prepend(visible.slice(0, ids.length - known.length).map((message) => ({
+          id: message.id,
+          height: heightsRef.current.get(message.id) || ROW_HEIGHT,
+        })));
+      } else {
+        index.reset();
+        for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
+      }
+    }
+    indexedKeyRef.current = key;
+    indexedIdsRef.current = ids;
+    return index;
+  }, [visible, key]);
   const totalHeight = heightIndex.total;
-  const start = Math.max(0, heightIndex.locate(scrollTop, blockTops) - OVERSCAN);
-  const end = Math.min(visible.length, heightIndex.locate(scrollTop + viewportHeight, blockTops) + OVERSCAN);
-  const shown = visible.slice(start, end);
+  const start = Math.max(0, heightIndex.locate(scrollTop) - OVERSCAN);
+  const end = Math.min(heightIndex.size, heightIndex.locate(scrollTop + viewportHeight) + OVERSCAN);
+  const shown = heightIndex.slice(start, end);
 
   const measureRow = useCallback((id: string, height: number) => {
-    if (height <= 0) return;
+    if (!Number.isFinite(height) || height <= 0) return;
+    height = Math.min(100000, height);
     heightsRef.current.set(id, height);
     if (heightIndex.update(id, height)) setMeasureVersion((value) => value + 1);
   }, [heightIndex]);
@@ -411,8 +471,8 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
             {shown.map((item, index) => (
               <MeasuredRow
                 key={item.id}
-                message={item}
-                top={heightIndex.topAt(start + index, blockTops)}
+                message={visible[start + index]}
+                top={item.top}
                 onHeight={measureRow}
               />
             ))}
@@ -488,78 +548,6 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
       {fileError && <Typography.Text type="danger" style={{ padding: "0 14px 8px" }}>{fileError}</Typography.Text>}
     </div>
   );
-}
-
-type HeightBlock = { ids: string[]; heights: number[]; sum: number };
-
-class HeightIndex {
-  private blocks: HeightBlock[] = [];
-  private positions = new Map<string, { block: number; offset: number }>();
-  total = 0;
-
-  constructor(messages: Message[], measured: Map<string, number>) {
-    for (let index = 0; index < messages.length; index += 1) {
-      const blockIndex = Math.floor(index / HEIGHT_BLOCK);
-      if (!this.blocks[blockIndex]) this.blocks[blockIndex] = { ids: [], heights: [], sum: 0 };
-      const block = this.blocks[blockIndex];
-      const offset = block.ids.length;
-      const height = measured.get(messages[index].id) || ROW_HEIGHT;
-      block.ids.push(messages[index].id);
-      block.heights.push(height);
-      block.sum += height;
-      this.total += height;
-      this.positions.set(messages[index].id, { block: blockIndex, offset });
-    }
-  }
-
-  update(id: string, height: number): boolean {
-    const position = this.positions.get(id);
-    if (!position) return false;
-    const block = this.blocks[position.block];
-    const previous = block.heights[position.offset];
-    if (!previous || Math.abs(previous - height) < 1) return false;
-    block.heights[position.offset] = height;
-    block.sum += height - previous;
-    this.total += height - previous;
-    return true;
-  }
-
-  blockTops(): number[] {
-    const tops = new Array(this.blocks.length);
-    let sum = 0;
-    for (let index = 0; index < this.blocks.length; index += 1) {
-      tops[index] = sum;
-      sum += this.blocks[index].sum;
-    }
-    return tops;
-  }
-
-  locate(target: number, tops: number[]): number {
-    if (target <= 0 || !this.blocks.length) return 0;
-    for (let blockIndex = 0; blockIndex < this.blocks.length; blockIndex += 1) {
-      const block = this.blocks[blockIndex];
-      if (target >= tops[blockIndex] + block.sum) continue;
-      let offset = 0;
-      let top = tops[blockIndex];
-      for (; offset < block.heights.length; offset += 1) {
-        top += block.heights[offset];
-        if (target < top) return blockIndex * HEIGHT_BLOCK + offset;
-      }
-      return blockIndex * HEIGHT_BLOCK + offset;
-    }
-    return this.total ? this.positions.size : 0;
-  }
-
-  topAt(index: number, tops: number[]): number {
-    if (index >= this.positions.size) return this.total;
-    const blockIndex = Math.floor(index / HEIGHT_BLOCK);
-    const block = this.blocks[blockIndex];
-    if (!block) return this.total;
-    const offset = index - blockIndex * HEIGHT_BLOCK;
-    let top = tops[blockIndex] || 0;
-    for (let i = 0; i < offset; i += 1) top += block.heights[i];
-    return top;
-  }
 }
 
 const MeasuredRow = memo(function MeasuredRow({

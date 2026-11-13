@@ -20,7 +20,7 @@
 
 ## 仍然存在的边界
 
-- `HeightIndex` 的构造在分页边界仍是 O(n)；块内更新/定位是 O(√n)。消息数组的不可变追加仍会复制当前会话数组。
+- 前端已接入常驻 `SqrtHeightIndex`，append/prepend/update 不再全量重建；消息数组的不可变追加仍会复制当前会话数组。
 - `/api/profiles` 的 Settings 保存仍逐 profile 写入并重连，未合并为一次事务。
 - CSP 的 `connect-src`/`img-src` 仍保留 `ws:`/`https:` 兼容范围；没有做远程图片代理。
 - Cookie 仍使用 `SameSite=Strict`，没有 `__Host-` 前缀和全端吊销接口。
@@ -41,4 +41,4 @@
 - N-09：SW 离线回退返回 504，不再把 undefined 交给 respondWith。
 - N-10：快照 fsync，Windows rename 重试；trim 仍是数组移动。
 - N-11：运行镜像只包含 dist，基础镜像摘要仍未固定。
-- 仍未清零：HeightIndex 分页 O(n)、profile 批量保存、CSP 宽范围、Cookie 全端吊销、CI/SAST。
+- v0.2.3：增量高度索引完成；仍未清零 profile 批量保存、CSP 宽范围、Cookie 全端吊销、CI/SAST。

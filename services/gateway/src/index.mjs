@@ -123,16 +123,42 @@ for (const profile of profiles) {
   startClient(profile);
 }
 
+function normalizeIp(raw) {
+  let value = String(raw || "").trim().toLowerCase();
+  if (value.startsWith("::ffff:")) value = value.slice(7);
+  return value.replace(/^\[|\]$/g, "");
+}
+
+function ipv4Number(value) {
+  const parts = value.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return (((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3]) >>> 0;
+}
+
+function ipMatches(remote, pattern) {
+  const normalized = normalizeIp(pattern);
+  if (!normalized.includes("/")) return normalizeIp(remote) === normalized;
+  const [network, bitsRaw] = normalized.split("/");
+  const bits = Number(bitsRaw);
+  const remoteNumber = ipv4Number(normalizeIp(remote));
+  const networkNumber = ipv4Number(network);
+  if (remoteNumber === null || networkNumber === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (remoteNumber & mask) === (networkNumber & mask);
+}
+
 function trustedProxy(req) {
-  return TRUST_PROXY && TRUSTED_PROXY_IPS.has(req.socket.remoteAddress || "");
+  if (!TRUST_PROXY || !TRUSTED_PROXY_IPS.size) return false;
+  const remote = req.socket.remoteAddress || "";
+  return [...TRUSTED_PROXY_IPS].some((pattern) => ipMatches(remote, pattern));
 }
 
 function clientIp(req) {
   if (trustedProxy(req)) {
     const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-    if (forwarded) return forwarded;
+    if (forwarded) return normalizeIp(forwarded);
   }
-  return req.socket.remoteAddress || "unknown";
+  return normalizeIp(req.socket.remoteAddress || "unknown");
 }
 
 const authFailures = new Map();
@@ -203,7 +229,9 @@ function authorized(req) {
 }
 function originAllowed(req) {
   const origin = String(req.headers.origin || "");
-  if (!origin) return !TOKEN;
+  // Non-browser clients do not send Origin. Keep them working unless the
+  // deployment explicitly opts into browser-only enforcement.
+  if (!origin) return process.env.REQUIRE_ORIGIN !== "1";
   if (ALLOWED_ORIGINS.length) return ALLOWED_ORIGINS.includes(origin);
   try { return new URL(origin).host === String(req.headers.host || ""); } catch { return false; }
 }
@@ -697,17 +725,28 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
+if (TRUST_PROXY && !TRUSTED_PROXY_IPS.size) {
+  console.warn("[config] TRUST_PROXY=1 但 TRUSTED_PROXY_IPS 为空，XFF 与 Secure Cookie 将被忽略");
+}
 const loopbackHost = ["127.0.0.1", "::1", "localhost"].includes(HOST);
 if (!TOKEN && !loopbackHost) {
   console.error("GATEWAY_TOKEN is required when HOST is not loopback");
   process.exit(1);
 }
-function fatal(error) {
-  console.error("fatal runtime error", error);
-  process.exit(1);
+const softFatalTimes = [];
+function fatal(error, source = "runtime") {
+  console.error(`[fatal:${source}]`, error);
+  const message = String(error?.message || error || "");
+  if (/EACCES|EIO|ENOSPC|SQLITE_CORRUPT|store|writeChain|fileHandle|out of memory/i.test(message)) {
+    process.exit(1);
+  }
+  const now = Date.now();
+  while (softFatalTimes.length && now - softFatalTimes[0] > 60_000) softFatalTimes.shift();
+  softFatalTimes.push(now);
+  if (softFatalTimes.length > 3) process.exit(1);
 }
-process.on("unhandledRejection", fatal);
-process.on("uncaughtException", fatal);
+process.on("unhandledRejection", (error) => fatal(error, "unhandledRejection"));
+process.on("uncaughtException", (error) => fatal(error, "uncaughtException"));
 
 await store.init();
 server.listen(PORT, HOST, () => {

@@ -169,3 +169,9 @@ media-src 'self' blob:
 ## 历史导入
 
 AstrBot 私聊历史导入必须由已登录用户在设置页勾选。服务端只挂载 AstrBot 数据目录为只读，接口只接受配置中已存在的私聊 target；群聊不导入。默认不会自动导入。
+
+## 单实例与代理
+
+- `DATA_DIR/gateway.lock` 阻止两个网关进程共用同一数据目录；异常退出后旧 PID 会被检测并清理。
+- `REQUIRE_ORIGIN=1` 时才强制浏览器 Origin；默认允许无 Origin 的 CLI/WebView 客户端。
+- `TRUST_PROXY=1` 必须配合 `TRUSTED_PROXY_IPS`（支持 IPv4 和 CIDR）；否则不采信 XFF。

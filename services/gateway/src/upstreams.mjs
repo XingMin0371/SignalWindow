@@ -49,14 +49,21 @@ function validateUpstreamHost(hostname) {
   throw new Error("OneBot WS 主机需要加入 UPSTREAM_HOST_ALLOWLIST");
 }
 
+function normalizeDigits(raw) {
+  return String(raw ?? "")
+    .replace(/[\uFF10-\uFF19]/g, (ch) => String(ch.charCodeAt(0) - 0xFF10))
+    .replace(/[\s_]/g, "")
+    .trim();
+}
+
 export function normalizeProfile(raw, index = 0) {
   const id = String(raw.id || `upstream-${index + 1}`).replace(/[^a-zA-Z0-9_-]/g, "-");
-  const wsUrl = String(raw.wsUrl || raw.onebotWs || "");
-  const selfId = String(raw.selfId || raw.botId || "");
+  const wsUrl = String(raw.wsUrl || raw.onebotWs || "").trim();
+  const selfId = normalizeDigits(raw.selfId || raw.botId || "");
   const privateUserIdsRaw = Array.isArray(raw.privateUserIds) ? raw.privateUserIds : [raw.privateUserId || raw.ownerId || ""];
   const groupIdsRaw = Array.isArray(raw.groupIds) ? raw.groupIds : [raw.groupId || ""];
-  const privateUserIds = [...new Set(privateUserIdsRaw.map((value) => String(value || "").trim()).filter(Boolean))];
-  const groupIds = [...new Set(groupIdsRaw.map((value) => String(value || "").trim()).filter(Boolean))];
+  const privateUserIds = [...new Set(privateUserIdsRaw.map(normalizeDigits).filter(Boolean))];
+  const groupIds = [...new Set(groupIdsRaw.map(normalizeDigits).filter(Boolean))];
   const privateUserId = privateUserIds[0] || "";
   if (!wsUrl) throw new Error("OneBot WS 地址不能为空");
   let parsed;

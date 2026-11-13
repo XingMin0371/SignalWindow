@@ -16,6 +16,7 @@ const MAX_RAW_MESSAGE_BYTES = Number(process.env.MAX_RAW_MESSAGE_BYTES || 12 * 1
 const MAX_MEDIA_TOTAL_BYTES = Number(process.env.MAX_MEDIA_TOTAL_BYTES || 512 * 1024 * 1024);
 const MAX_MEDIA_FILES = Number(process.env.MAX_MEDIA_FILES || 5000);
 const COMPACT_EVERY_TRIMS = Number(process.env.COMPACT_EVERY_TRIMS || 500);
+const LOCK_FILE = path.join(DATA_DIR, "gateway.lock");
 
 const mediaState = { bytes: 0, files: 0, checkedAt: 0 };
 async function refreshMediaStats(force = false) {
@@ -124,10 +125,12 @@ class Store {
     this.trimmed = 0;
     this.compacting = false;
     this.fileHandle = null;
+    this.lockHandle = null;
   }
 
   async init() {
     await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
+    await this._acquireLock();
     await fs.mkdir(MEDIA_DIR, { recursive: true, mode: 0o700 });
     await fs.chmod(DATA_DIR, 0o700).catch(() => {});
     await fs.chmod(MEDIA_DIR, 0o700).catch(() => {});
@@ -176,6 +179,35 @@ class Store {
       }
     } catch {}
     await refreshMediaStats(true);
+  }
+
+  async _acquireLock() {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const handle = await fs.open(LOCK_FILE, "wx", 0o600);
+        await handle.writeFile(`${process.pid}\n`);
+        this.lockHandle = handle;
+        return;
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        let owner = 0;
+        try { owner = Number((await fs.readFile(LOCK_FILE, "utf8")).trim()); } catch {}
+        let alive = false;
+        if (owner > 0) {
+          try { process.kill(owner, 0); alive = true; } catch (probe) { alive = probe.code === "EPERM"; }
+        }
+        if (alive) throw new Error("another gateway instance is using DATA_DIR");
+        await fs.unlink(LOCK_FILE).catch(() => {});
+      }
+    }
+    throw new Error("could not acquire DATA_DIR lock");
+  }
+
+  async _releaseLock() {
+    if (!this.lockHandle) return;
+    try { await this.lockHandle.close(); } catch {}
+    this.lockHandle = null;
+    await fs.unlink(LOCK_FILE).catch(() => {});
   }
 
   async _load() {
@@ -359,6 +391,7 @@ class Store {
       await this.fileHandle.close();
       this.fileHandle = null;
     }
+    await this._releaseLock();
   }
 }
 

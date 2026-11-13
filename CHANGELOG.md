@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.3 - 2026-11-13
+
+### A 章 P0 / 性能
+
+- gap 不再强制刷新页面；前端重新拉取当前会话历史，输入草稿通过 sessionStorage 恢复。
+- Origin 校验增加 `REQUIRE_ORIGIN` 开关，默认允许无 Origin 的 CLI/WebView 客户端。
+- 可信代理 IP 归一化并支持 IPv4 CIDR；`TRUST_PROXY=1` 无列表时启动告警。
+- 增加 DATA_DIR 单实例锁，阻止两个网关进程互相覆盖。
+- 致命异常按状态损坏/软错误窗口分级，不再所有 rejection 立即退出。
+- 前端高度索引改为常驻 √ 分块增量结构，append/prepend/update 不再全量重建；增加随机等价性验证。
+
+### 仍未清零
+
+- 消息数组不可变追加仍有复制成本。
+- profile 批量保存未事务化。
+- CSP ws/https 兼容范围、Cookie 全端吊销、CI/SAST。
+- SQLite WAL 后端未切换，仍使用 NDJSON。
+
 ## 0.2.2 - 2026-11-13
 
 ### 复审修复

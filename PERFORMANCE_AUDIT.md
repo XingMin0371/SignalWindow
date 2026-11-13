@@ -81,7 +81,7 @@ Ant Design remains the largest shared chunk. Further reduction would require rep
 ## Residual risks
 
 1. The initial Ant Design chunk is still large on slow mobile networks.
-2. The chat log uses windowed rendering; rebuilding block metadata at a page boundary is still O(n).
+2. The chat log uses windowed rendering; the height index is incremental, but message-array append still copies the current conversation array.
 3. Media files are retained unless manually cleaned; message metadata remains capped.
 4. Media has a 512 MiB / 5000-file default quota and unreferenced files are pruned after compaction.
 5. Recharts and CodeMirror are loaded only on their pages, but they are still sizable.
