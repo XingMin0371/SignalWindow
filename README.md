@@ -312,11 +312,11 @@ Lite 模式会隐藏动态背景
 
 ```text
 Windows：双击 START-WINDOWS.cmd
-Linux：  bash start-linux.sh
+Linux：  ./start-linux.sh
 Docker： cd infra && docker compose up -d --build
 Android：浏览器访问，参考 ANDROID.md；PWA 不需要 APK
 ```
 
-首次启动会运行 `scripts/setup.mjs`。需要 Node.js 18.18+（推荐 20/22 LTS） 和 pnpm。Android 不运行服务端，只作为浏览器/PWA 客户端。
+首次启动由 `scripts/start.mjs` 自动生成最小 `.env` 并检查依赖；AstrBot 实例在网页设置向导中填写。`scripts/setup.mjs` 是可选交互式配置。需要 Node.js 18.18+；pnpm 可用时优先使用，否则自动回退 npm。Android 不运行服务端，只作为浏览器/PWA 客户端。
 
 兼容性矩阵见 [COMPATIBILITY.md](COMPATIBILITY.md)，规范与安全边界见 [STANDARDS.md](STANDARDS.md)。
