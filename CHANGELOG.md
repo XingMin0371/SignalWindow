@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.2.0 - 2026-11-13
+
 ## 2026-11-12
 
 - Private history import is now user-selected in Settings; automatic import removed. Scroll loading uses 30 per page, idle-triggered auto-load, and anchored scroll restoration.
