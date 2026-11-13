@@ -39,6 +39,9 @@ const TRUSTED_PROXY_IPS = new Set(String(process.env.TRUSTED_PROXY_IPS || "").sp
 const SESSION_COOKIE = "slw_session";
 const SESSION_COOKIE_SECURE = "__Host-slw_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_SESSIONS = 5000;
+const MAX_RATE_KEYS = 10000;
+const MAX_CLIENT_IDS = 100000;
 const sessions = new Map();
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean);
 const MAX_CLIENTS = envInt("MAX_CLIENTS", 100, 1, 100000);
@@ -142,28 +145,14 @@ function startClient(profile) {
   onebots.set(profile.id, client);
   client.start();
 }
-function addProfile(raw) {
-  const existing = profileMap.get(String(raw?.id || ""));
-  const wsUrl = raw?.wsUrl === undefined ? existing?.wsUrl : raw?.wsUrl;
-  const keepToken = existing && (raw?.accessToken === undefined || raw?.accessToken === "");
-  const input = {
-    ...raw,
-    wsUrl,
-    accessToken: keepToken ? existing.accessToken : (raw?.accessToken ?? ""),
-  };
-  const profile = normalizeProfile(input, profileMap.size);
-  profileMap.set(profile.id, profile);
-  profiles = [...profileMap.values()];
-  startClient(profile);
-  return profile;
-}
 async function replaceProfiles(rawProfiles) {
   if (!Array.isArray(rawProfiles)) throw new Error("profiles 必须是数组");
   const ids = new Set();
   const next = rawProfiles.map((raw, index) => {
     const existing = profileMap.get(String(raw?.id || ""));
     const wsUrl = raw?.wsUrl === undefined ? existing?.wsUrl : raw?.wsUrl;
-    const keepToken = existing && (raw?.accessToken === undefined || raw?.accessToken === "");
+    const sameEndpoint = existing && String(wsUrl || "") === String(existing.wsUrl || "");
+    const keepToken = sameEndpoint && (raw?.accessToken === undefined || raw?.accessToken === "");
     const input = {
       ...raw,
       wsUrl,
@@ -233,7 +222,7 @@ function trustedProxy(req) {
 
 function clientIp(req) {
   if (trustedProxy(req)) {
-    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim().slice(0, 128);
     if (forwarded) return normalizeIp(forwarded);
   }
   return normalizeIp(req.socket.remoteAddress || "unknown");
@@ -241,6 +230,10 @@ function clientIp(req) {
 
 const authFailures = new Map();
 const apiRates = new Map();
+
+function capMap(map, limit) {
+  while (map.size > limit) map.delete(map.keys().next().value);
+}
 
 function apiRateLimited(req, limit = 120, windowMs = 10_000, bucket = "api") {
   const ip = clientIp(req);
@@ -250,6 +243,7 @@ function apiRateLimited(req, limit = 120, windowMs = 10_000, bucket = "api") {
   if (recent.length >= limit) { apiRates.set(key, recent); return true; }
   recent.push(now);
   apiRates.set(key, recent);
+  capMap(apiRates, MAX_RATE_KEYS);
   return false;
 }
 function safeEqual(a, b) {
@@ -271,13 +265,16 @@ function noteAuthFailure(req) {
   const recent = (authFailures.get(key) || []).filter((time) => now - time < 60_000);
   recent.push(now);
   authFailures.set(key, recent);
+  capMap(authFailures, MAX_RATE_KEYS);
 }
 function cookieValue(req, name) {
   const raw = String(req.headers.cookie || "");
   for (const part of raw.split(";")) {
     const index = part.indexOf("=");
     if (index < 0) continue;
-    if (part.slice(0, index).trim() === name) return decodeURIComponent(part.slice(index + 1).trim());
+    if (part.slice(0, index).trim() === name) {
+      try { return decodeURIComponent(part.slice(index + 1).trim()); } catch { return ""; }
+    }
   }
   return "";
 }
@@ -292,6 +289,13 @@ function createSession(req, res) {
   const name = sessionCookieName(secure);
   const previous = cookieValue(req, name) || cookieValue(req, SESSION_COOKIE);
   if (previous) sessions.delete(previous);
+  if (sessions.size >= MAX_SESSIONS) {
+    for (const [sessionId, expires] of sessions) {
+      if (expires < Date.now()) sessions.delete(sessionId);
+      if (sessions.size < MAX_SESSIONS) break;
+    }
+    if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
+  }
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, Date.now() + SESSION_TTL_MS);
   res.setHeader("Set-Cookie", `${name}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
@@ -362,7 +366,12 @@ function writeError(res, error) {
   res.end(JSON.stringify({ error: String(error && error.message || error) }));
 }
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, "http://localhost");
+  let url;
+  try { url = new URL(req.url, "http://localhost"); } catch {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("bad request");
+    return;
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   if (!hostAllowed(req)) {
     res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
@@ -521,11 +530,13 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
-      const profile = addProfile(body.profile || body);
-      await saveProfiles([...profileMap.values()]);
-      broadcastProfiles();
+      const raw = body.profile || body;
+      const rawId = String(raw?.id || "");
+      const nextRaw = [...profiles.filter((profile) => profile.id !== rawId), raw];
+      const next = await replaceProfiles(nextRaw);
+      const profile = next.find((item) => item.id === (rawId || next[next.length - 1]?.id));
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, profile: publicProfile(profile) }));
+      res.end(JSON.stringify({ ok: true, profile: publicProfile(profile || next[next.length - 1]) }));
     } catch (error) {
       writeError(res, error);
     }
@@ -538,7 +549,12 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    const id = decodeURIComponent(url.pathname.slice("/api/profiles/".length));
+    let id;
+    try { id = decodeURIComponent(url.pathname.slice("/api/profiles/".length)); } catch {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
     const profile = profileMap.get(id);
     if (!profile) {
       res.writeHead(404, { "content-type": "application/json" });
@@ -636,7 +652,10 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
-    const name = decodeURIComponent(url.pathname.slice("/api/media/".length));
+    let name;
+    try { name = decodeURIComponent(url.pathname.slice("/api/media/".length)); } catch {
+      res.writeHead(404); res.end("not found"); return;
+    }
     if (!/^[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(name)) {
       res.writeHead(404); res.end("not found"); return;
     }
@@ -647,7 +666,7 @@ const server = http.createServer(async (req, res) => {
       const ext = path.extname(name).slice(1).toLowerCase();
       const types = {
         jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
-        webp: "image/webp", bmp: "image/bmp", mp3: "audio/mpeg", wav: "audio/wav",
+        webp: "image/webp", bmp: "image/bmp", avif: "image/avif", mp3: "audio/mpeg", wav: "audio/wav",
         ogg: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
         pdf: "application/pdf", txt: "text/plain; charset=utf-8", json: "application/json; charset=utf-8",
       };
@@ -686,6 +705,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith("/api/")) {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+    return;
+  }
   let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
   try { filePath = decodeURIComponent(filePath); } catch { /* 非法百分号编码：保留原串，由 404 处理 */ }
   filePath = path.resolve(PUBLIC_DIR, `.${filePath}`);
@@ -880,7 +904,12 @@ const wsHeartbeat = setInterval(() => {
 wsHeartbeat.unref();
 
 server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url, "http://localhost");
+  let url;
+  try { url = new URL(req.url, "http://localhost"); } catch {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   const ip = clientIp(req);
   const ipCount = [...clients].filter((client) => client.remoteAddress === ip).length;
   if (clients.size >= MAX_CLIENTS || ipCount >= MAX_CLIENTS_PER_IP || !hostAllowed(req) || !originAllowed(req)) {
@@ -901,7 +930,8 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  wss.handleUpgrade(req, socket, head, (ws) => {
+  try {
+    wss.handleUpgrade(req, socket, head, (ws) => {
     clients.add(ws);
     ws.remoteAddress = ip;
     ws.isAlive = true;
@@ -939,7 +969,11 @@ server.on("upgrade", (req, socket, head) => {
       onebots: Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])),
     });
     // History is loaded lazily by the browser for the selected conversation only.
-  });
+    });
+  } catch (error) {
+    console.error("[ws-upgrade]", error.message);
+    socket.destroy();
+  }
 });
 
 if (TRUST_PROXY && !TRUSTED_PROXY_IPS.size) {

@@ -22,8 +22,8 @@ function envInt(name, fallback, min, max) {
 }
 const MAX_MESSAGES = envInt("MAX_MESSAGES", 4000, 1, 10_000_000);
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
-const MAX_MESSAGE_BYTES = Number(process.env.MAX_MESSAGE_BYTES || 256 * 1024);
-const MAX_RAW_MESSAGE_BYTES = Number(process.env.MAX_RAW_MESSAGE_BYTES || 12 * 1024 * 1024);
+const MAX_MESSAGE_BYTES = envInt("MAX_MESSAGE_BYTES", 256 * 1024, 1024, 64 * 1024 * 1024);
+const MAX_RAW_MESSAGE_BYTES = envInt("MAX_RAW_MESSAGE_BYTES", 12 * 1024 * 1024, 1024, 128 * 1024 * 1024);
 const MAX_MEDIA_TOTAL_BYTES = envInt("MAX_MEDIA_TOTAL_BYTES", 512 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER);
 const MAX_MEDIA_FILES = envInt("MAX_MEDIA_FILES", 5000, 1, 10_000_000);
 const COMPACT_EVERY_TRIMS = envInt("COMPACT_EVERY_TRIMS", 500, 1, 10_000_000);
@@ -64,7 +64,7 @@ function extensionFor(mime, fallback = "") {
   const match = /^[a-z0-9.+-]+\/([a-z0-9.+-]+)$/i.exec(String(mime || ""));
   const sub = match?.[1]?.toLowerCase() || "";
   const map = {
-    jpeg: "jpg", jpg: "jpg", png: "png", gif: "gif", webp: "webp", bmp: "bmp",
+    jpeg: "jpg", jpg: "jpg", png: "png", gif: "gif", webp: "webp", bmp: "bmp", avif: "avif",
     mpeg: "mp3", mp3: "mp3", wav: "wav", ogg: "ogg", mp4: "mp4", webm: "webm",
     quicktime: "mov", pdf: "pdf", json: "json", plain: "txt", zip: "zip",
   };
@@ -198,19 +198,25 @@ class Store {
     if (this.pendingFlush) return this.pendingFlush;
     this.pendingFlush = new Promise((resolve, reject) => {
       setImmediate(async () => {
+        let activeBatch = [];
         try {
           // Keep one write in flight at a time. New lines that arrive while
           // the write is pending are picked up by this loop, so they cannot
           // be left stranded without a future flush.
           while (this.pendingLines.length) {
-            const batch = this.pendingLines.splice(0);
-            const lines = batch.join("");
+            activeBatch = this.pendingLines.splice(0);
+            const lines = activeBatch.join("");
             const handle = await this._openHandle();
             await handle.write(lines);
+            activeBatch = [];
           }
           this.pendingFlush = null;
           resolve();
         } catch (error) {
+          // Do not discard the batch that failed to write. It will be retried
+          // after the caller observes appendError and performs the next add or
+          // flush, preserving both order and data.
+          if (activeBatch.length) this.pendingLines.unshift(...activeBatch);
           this.pendingFlush = null;
           reject(error);
         }
@@ -476,8 +482,13 @@ class Store {
         const existingKeys = new Set(existing
           .filter((message) => message.conversation === "private" && String(message.targetId) === target)
           .map((message) => `${message.role}\u0000${message.text || ""}`));
-        const fresh = records.filter((record) =>
-          !existingKeys.has(`${record.role}\u0000${record.text || ""}`));
+        const fresh = [];
+        for (const record of records) {
+          const key = `${record.role}\u0000${record.text || ""}`;
+          if (existingKeys.has(key)) continue;
+          existingKeys.add(key);
+          fresh.push(record);
+        }
         this.messages = [...fresh, ...existing];
         this._rebuildIndex();
         this._trim();

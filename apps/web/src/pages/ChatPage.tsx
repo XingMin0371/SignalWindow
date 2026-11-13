@@ -128,6 +128,16 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     };
   }, []);
 
+  function safeSocketSend(socket: WebSocket | null, payload: unknown): boolean {
+    try {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // A single reconnecting socket. Pending sends survive a reconnect and are
   // transmitted once the socket is open again.
   useEffect(() => {
@@ -145,7 +155,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
         attempt = 0;
         setConnected(true);
         const pending = pendingRef.current;
-        if (pending) ws.send(JSON.stringify(pending.payload));
+        if (pending) safeSocketSend(ws, pending.payload);
       };
 
       ws.onerror = () => { setConnected(false); };
@@ -232,14 +242,14 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
           if (active.target && socket?.readyState === WebSocket.OPEN) {
             setHistoryLoading(true);
             setHasMore(true);
-            socket.send(JSON.stringify({
+            if (!safeSocketSend(socket, {
               type: "history",
               profile: active.profileId,
               conversation: active.target.conversation,
               targetId: active.target.targetId,
               limit: PAGE_SIZE,
               requestId: String(++historySeq.current),
-            }));
+            })) setHistoryLoading(false);
           }
           return;
         }
@@ -435,7 +445,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
       ? { id: firstVisible.dataset.messageId || "", top: firstVisible.getBoundingClientRect().top - logTop }
       : null;
     prependHeightRef.current = log?.scrollHeight || 0;
-    ws.send(JSON.stringify({
+    if (!safeSocketSend(ws, {
       type: "history",
       profile: profileId,
       conversation: target.conversation,
@@ -443,7 +453,10 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
       beforeId: visible[0].id,
       limit: PAGE_SIZE,
       requestId: String(++historySeq.current),
-    }));
+    })) {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
   }
 
   function send() {
@@ -471,7 +484,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
       setSendError("等待网关重连后自动发送");
       return;
     }
-    ws.send(JSON.stringify(payload));
+    if (!safeSocketSend(ws, payload)) setSendError("等待网关重连后自动发送");
   }
 
   if (!profiles.length) return <Empty description="尚未配置 AstrBot，请先到「AstrBot 实例」添加" />;

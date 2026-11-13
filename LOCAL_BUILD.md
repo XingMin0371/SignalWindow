@@ -156,7 +156,7 @@ curl http://127.0.0.1:8787/api/config
 
 ### `pnpm` 不存在
 
-安装 Node 24 后执行 `corepack enable`，或按官方方式安装 pnpm。
+安装 Node 18.18+（推荐 20/22 LTS）后执行 `corepack enable`，或按官方方式安装 pnpm。
 
 ### `apps/web/dist` 不存在
 

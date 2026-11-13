@@ -5,7 +5,7 @@
 - 网关默认监听 `127.0.0.1`，不会自动暴露公网。
 - 生产环境必须设置 `GATEWAY_TOKEN`。
 - 配置页只在通过 Token 后允许写入 profile。
-- OneBot accessToken 不会通过 `/api/config` 或 `/api/profiles/:id` 返回给浏览器；编辑时留空会沿用旧值。
+- OneBot accessToken 不会通过 `/api/config` 或 `/api/profiles/:id` 返回给浏览器；只有上游地址不变时，编辑留空才会沿用旧值。
 - 配置写入 `upstreams.json` 时使用临时文件替换，权限为 `0600`。
 - 静态文件路径使用 `path.resolve` + `path.relative`，拒绝目录穿越。
 - WebSocket 使用 HttpOnly 会话 Cookie 鉴权；query token 和 `auth.*` 子协议 token 默认关闭，仅在显式环境变量开启时兼容。
@@ -177,3 +177,5 @@ AstrBot 私聊历史导入必须由已登录用户在设置页勾选。服务端
 - `TRUST_PROXY=1` 必须配合 `TRUSTED_PROXY_IPS`（支持 IPv4 和 CIDR）；否则不采信 XFF。
 - 可选 `MEDIA_HOST_ALLOWLIST` 限制远程媒体域名；留空保持现有兼容行为。
 - HTTPS 且可信代理下使用 `__Host-slw_session`，HTTP 继续使用 `slw_session`。
+- 修改上游地址后，旧的 OneBot accessToken 会被清空，避免把凭据发送到新地址。
+- 合并写盘失败时保留待写批次；正常关闭会执行 flush，强制终止进程时允许丢失最后一批尚未写盘消息。

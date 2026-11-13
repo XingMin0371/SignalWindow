@@ -44,4 +44,5 @@ export interface Health {
   onebot: boolean;
   onebots: Record<string, boolean>;
   service: string;
+  version: string;
 }

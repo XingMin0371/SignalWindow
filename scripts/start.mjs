@@ -65,6 +65,11 @@ const child = spawn(nodeBin, [path.join(REPO_ROOT, "services/gateway/src/index.m
   cwd: REPO_ROOT, env: process.env, stdio: "inherit",
 });
 let closed = false;
+child.on("error", (error) => {
+  closed = true;
+  console.error("[Signal Window] 启动网关失败：" + error.message);
+  process.exitCode = 1;
+});
 child.on("exit", (code, signal) => {
   closed = true;
   process.exitCode = signal ? 1 : (code ?? 1);

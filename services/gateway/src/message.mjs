@@ -13,7 +13,7 @@ export function safeUrl(url, kind) {
     if (!allowedHosts.length) return value;
     try { return allowedHosts.includes(new URL(value).hostname.toLowerCase()) ? value : ""; } catch { return ""; }
   }
-  if (kind === "image" && /^data:image\/(?:png|jpe?g|gif|webp|bmp)[;,]|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
+  if (kind === "image" && /^data:image\/(?:png|jpe?g|gif|webp|bmp|avif)[;,]|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
   if (kind === "file" && /^data:(?:application\/(?:pdf|json|zip|octet-stream)|audio\/|video\/|font\/|image\/(?!svg)|text\/(?:plain|csv))|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
   if ((kind === "audio" || kind === "video") && /^data:(?:audio|video)\//i.test(value)) return value;
   return "";

@@ -45,8 +45,12 @@ if (/[\r\n#="'\s]/.test(gatewayToken)) {
   process.exit(1);
 }
 
-if (!selfId || !privateUserId) {
-  console.error("self_id 和 private user_id 必须填写");
+if (!/^\d{5,12}$/.test(selfId) || !/^\d{5,12}$/.test(privateUserId)) {
+  console.error("self_id 和 private user_id 必须是 5-12 位数字");
+  process.exit(1);
+}
+if (groupId && !/^\d{5,12}$/.test(groupId)) {
+  console.error("群号必须是 5-12 位数字，或留空");
   process.exit(1);
 }
 

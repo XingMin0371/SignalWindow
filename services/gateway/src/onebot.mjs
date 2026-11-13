@@ -34,7 +34,19 @@ export class OneBotClient extends EventEmitter {
     };
     if (this.config.accessToken) headers.Authorization = `Bearer ${this.config.accessToken}`;
     this.emit("status", { profile: this.config.id, label: this.config.label, connected: false, detail: "connecting" });
-    const ws = new WebSocket(this.config.wsUrl, { headers, maxPayload: 2 * 1024 * 1024, handshakeTimeout: 10_000 });
+    let ws;
+    try {
+      ws = new WebSocket(this.config.wsUrl, { headers, maxPayload: 2 * 1024 * 1024, handshakeTimeout: 10_000 });
+    } catch (error) {
+      this.emit("status", { profile: this.config.id, label: this.config.label, connected: false, detail: error.message });
+      if (!this.stopped) {
+        const delay = Math.min(30_000, 1000 * 2 ** this.reconnectAttempt) + Math.floor(Math.random() * 500);
+        this.reconnectAttempt += 1;
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = setTimeout(() => this.connect(), delay);
+      }
+      return;
+    }
     this.ws = ws;
 
     ws.on("open", () => {

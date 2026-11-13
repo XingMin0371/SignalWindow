@@ -4,8 +4,8 @@
 
 | Environment | Status | Notes |
 |---|---|---|
-| Windows 10/11 + Node 24 | supported | `START-WINDOWS.cmd` |
-| Linux x64 + Node 24 | supported | `start-linux.sh` |
+| Windows 10/11 + Node 18.18+ | supported | `START-WINDOWS.cmd`；推荐 Node 20/22 LTS |
+| Linux x64 + Node 18.18+ | supported | `start-linux.sh`；推荐 Node 20/22 LTS |
 | Docker Desktop / Linux Compose | supported | `infra/docker-compose.yml` |
 | Android Chrome/Edge | client only | PWA, see `ANDROID.md` |
 | iOS Safari | client only | add to Home Screen; HTTPS preferred |
@@ -13,7 +13,7 @@
 
 ## Browser baseline
 
-The production target is:
+The production target is a build target, not a hard runtime guarantee:
 
 ```text
 JavaScript: ES2017
