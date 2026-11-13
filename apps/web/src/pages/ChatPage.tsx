@@ -491,9 +491,18 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
             onChange={(event) => {
               const selected = event.target.files?.[0];
               if (!selected) return;
-              if (selected.size > 2_000_000) return;
+              if (!selected.type.startsWith("image/")) {
+                setSendError("请选择图片文件");
+                event.target.value = "";
+                return;
+              }
+              if (selected.size > 2_000_000) {
+                setSendError("图片超过 2 MB");
+                event.target.value = "";
+                return;
+              }
               const reader = new FileReader();
-              reader.onload = () => setImage(String(reader.result || ""));
+              reader.onload = () => { setImage(String(reader.result || "")); setSendError(""); };
               reader.readAsDataURL(selected);
             }}
           />
