@@ -25,7 +25,7 @@ dispose(); // 取消订阅
 
 | 事件 | payload | 触发时机 |
 |---|---|---|
-| `message-added` | `{ message, source }` | 消息完成内存索引并入队落盘后（web 发送 / onebot 回复） |
+| `message-added` | `{ message, source }` | 消息完成内存索引并进入写盘队列后（不等待实际落盘；web 发送 / onebot 回复） |
 | `client-open` | `{ count, remoteIp }` | 浏览器 WS 建立 |
 | `client-close` | `{ count, remoteIp }` | 浏览器 WS 断开 |
 | `profiles-updated` | `{ ids }` | `PUT /api/profiles` 整体替换配置后 |

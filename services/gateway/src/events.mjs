@@ -9,7 +9,7 @@
  *   避免内部实现被外部依赖。
  *
  * 内置事件（payload 均为纯数据快照，禁止传内部对象引用后修改）：
- *   message-added     { message, source }   每条消息落盘后（web 发送 / onebot 回复 / 导入）
+ *   message-added     { message, source }   每条消息写入内存并进入写盘队列后（不等待实际落盘；web 发送 / onebot 回复 / 导入）
  *   client-open       { count, remoteIp }   浏览器 WS 建立
  *   client-close      { count, remoteIp }   浏览器 WS 断开
  *   profiles-updated  { ids }               实例配置整体替换后

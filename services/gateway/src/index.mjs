@@ -67,6 +67,13 @@ function publicProfile(profile) {
   };
 }
 const GAP_FRAME = JSON.stringify({ type: "gap" });
+function snapshotMessage(message) {
+  return {
+    ...message,
+    parts: Array.isArray(message?.parts) ? message.parts.map((part) => ({ ...part })) : [],
+  };
+}
+
 function broadcast(payload) {
   const data = JSON.stringify(payload);
   for (const ws of clients) {
@@ -119,7 +126,7 @@ function startClient(profile) {
         source: "onebot",
       });
       broadcast({ type: "message", message });
-      events.emit("message-added", { message, source: "onebot" });
+      events.emit("message-added", { message: snapshotMessage(message), source: "onebot" });
       return message;
     },
   });
@@ -853,7 +860,7 @@ registerWsHandler("send", async (ws, payload) => {
     return;
   }
   broadcast({ type: "message", message });
-  events.emit("message-added", { message, source: "web" });
+  events.emit("message-added", { message: snapshotMessage(message), source: "web" });
   try {
     await onebots.get(profileId).send({ conversation, targetId, parts });
   } catch (error) {
