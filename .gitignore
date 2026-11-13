@@ -5,3 +5,6 @@ data/
 config/upstreams.json
 
 CON
+.env*
+*.bak
+config/*.bak

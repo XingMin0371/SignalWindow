@@ -1,5 +1,51 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import net from "node:net";
+
+function normalizedHost(hostname) {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
+
+function privateIpv4(address) {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [a, b] = parts;
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 192 && b === 0) ||
+    (a === 198 && (b === 18 || b === 19)) || a >= 224;
+}
+
+function privateIp(address) {
+  const host = normalizedHost(address);
+  const version = net.isIP(host);
+  if (version === 4) return privateIpv4(host);
+  if (version === 6) {
+    if (host === "::1" || host === "::" || host.startsWith("fc") || host.startsWith("fd") ||
+      host.startsWith("fe8") || host.startsWith("fe9") || host.startsWith("fea") || host.startsWith("feb") ||
+      host.startsWith("ff") || host.startsWith("2001:db8")) return true;
+    if (host.startsWith("::ffff:")) return privateIpv4(host.slice(7));
+  }
+  return false;
+}
+
+function validateUpstreamHost(hostname) {
+  const host = normalizedHost(hostname);
+  const allowedHosts = String(process.env.UPSTREAM_HOST_ALLOWLIST || "")
+    .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  if (allowedHosts.length) {
+    if (!allowedHosts.includes(host)) throw new Error("OneBot WS 主机不在 UPSTREAM_HOST_ALLOWLIST 中");
+    return;
+  }
+  if (net.isIP(host)) {
+    if (privateIp(host) && host !== "127.0.0.1" && host !== "::1") {
+      throw new Error("OneBot WS 不允许连接私有/保留地址；请设置 UPSTREAM_HOST_ALLOWLIST");
+    }
+    return;
+  }
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return;
+  throw new Error("OneBot WS 主机需要加入 UPSTREAM_HOST_ALLOWLIST");
+}
 
 export function normalizeProfile(raw, index = 0) {
   const id = String(raw.id || `upstream-${index + 1}`).replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -15,15 +61,7 @@ export function normalizeProfile(raw, index = 0) {
   try { parsed = new URL(wsUrl); } catch { throw new Error("OneBot WS 地址格式不正确"); }
   if (!["ws:", "wss:"].includes(parsed.protocol)) throw new Error("OneBot WS 地址必须是 ws:// 或 wss://");
   if (wsUrl.length > 2048 || parsed.username || parsed.password) throw new Error("OneBot WS 地址不合法");
-  const host = parsed.hostname.toLowerCase();
-  const allowedHosts = String(process.env.UPSTREAM_HOST_ALLOWLIST || "")
-    .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
-  if (allowedHosts.length && !allowedHosts.includes(host)) {
-    throw new Error("OneBot WS 主机不在 UPSTREAM_HOST_ALLOWLIST 中");
-  }
-  if (host === "169.254.169.254" || host === "metadata.google.internal" || host === "metadata.azure.internal" || host === "0.0.0.0" || host.startsWith("169.254.") || host === "fd00:ec2::254") {
-    throw new Error("不允许连接云元数据地址");
-  }
+  validateUpstreamHost(parsed.hostname);
   if (!/^\d{5,12}$/.test(selfId)) throw new Error("Bot QQ / self_id 必须是 5-12 位数字");
   if (!privateUserId || !privateUserIds.every((value) => /^\d{5,12}$/.test(value))) throw new Error("至少一个私聊对象，QQ 必须是 5-12 位数字");
   if (!groupIds.every((value) => /^\d{5,12}$/.test(value))) throw new Error("群号必须是 5-12 位数字");

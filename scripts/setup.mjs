@@ -48,12 +48,15 @@ const profiles = {
 await fs.mkdir("config", { recursive: true });
 if (await fs.access(".env").then(() => true).catch(() => false)) {
   await fs.copyFile(".env", ".env.bak");
+  await fs.chmod(".env.bak", 0o600).catch(() => {});
 }
 if (await fs.access("config/upstreams.json").then(() => true).catch(() => false)) {
   await fs.copyFile("config/upstreams.json", "config/upstreams.json.bak");
+  await fs.chmod("config/upstreams.json.bak", 0o600).catch(() => {});
 }
-await fs.writeFile(".env", env, "utf8");
-await fs.writeFile("config/upstreams.json", JSON.stringify(profiles, null, 2), "utf8");
+await fs.writeFile(".env", env, { encoding: "utf8", mode: 0o600 });
+await fs.writeFile("config/upstreams.json", JSON.stringify(profiles, null, 2), { encoding: "utf8", mode: 0o600 });
+await fs.chmod(".env", 0o600).catch(() => {});
 await fs.chmod("config/upstreams.json", 0o600).catch(() => {});
 rl.close();
 console.log("\n已写入 .env 和 config/upstreams.json");

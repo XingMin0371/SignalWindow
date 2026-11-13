@@ -46,12 +46,19 @@ export class OneBotClient extends EventEmitter {
     ws.on("message", (data) => {
       let payload;
       try { payload = JSON.parse(data.toString()); } catch { return; }
-      if (!payload.action) return;
-      this.handleAction(payload).then((response) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ ...response, echo: payload.echo }));
-        }
-      });
+      if (!payload || typeof payload !== "object" || typeof payload.action !== "string") return;
+      this.handleAction(payload)
+        .then((response) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ ...response, echo: payload.echo }));
+          }
+        })
+        .catch((error) => {
+          console.error("[onebot-action]", error.message);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ status: "failed", retcode: 1500, echo: payload.echo }));
+          }
+        });
     });
 
     ws.on("close", () => {
@@ -71,17 +78,21 @@ export class OneBotClient extends EventEmitter {
   }
 
   async handleAction(payload) {
-    const { action, params = {} } = payload;
-    const messageType = String(
-      params.message_type ||
-      (action === "send_private_msg" ? "private" : action === "send_group_msg" ? "group" : params.group_id ? "group" : "private"),
-    );
     try {
+      if (!payload || typeof payload !== "object" || typeof payload.action !== "string") {
+        return { status: "failed", retcode: 1400, data: null };
+      }
+      const action = payload.action;
+      const params = payload.params && typeof payload.params === "object" ? payload.params : {};
+      const messageType = String(
+        params.message_type ||
+        (action === "send_private_msg" ? "private" : action === "send_group_msg" ? "group" : params.group_id ? "group" : "private"),
+      );
       if (/^send_/.test(action)) {
         const segments = Array.isArray(params.message)
           ? params.message.map((item) => `${item?.type || "?"}:${item?.data?.file ? "file" : item?.data?.url ? "url" : ""}`).join(",")
           : typeof params.message;
-        console.log("[onebot-action]", action, messageType, segments);
+        console.log("[onebot-action]", String(action).replace(/[\r\n]/g, " "), messageType, String(segments).slice(0, 200).replace(/[\r\n]/g, " "));
       }
       if (action === "send_private_msg" || action === "send_group_msg" || action === "send_msg") {
         const parts = normalizeMessage(params.message);
@@ -155,7 +166,10 @@ export class OneBotClient extends EventEmitter {
       privateUserId: this.config.privateUserIds[0] || this.config.selfId,
       parts,
     });
-    this.ws.send(JSON.stringify(payload));
+    if (this.ws.bufferedAmount > 1024 * 1024) throw new Error("OneBot backpressure limit exceeded");
+    await new Promise((resolve, reject) => {
+      this.ws.send(JSON.stringify(payload), (error) => error ? reject(error) : resolve());
+    });
     return payload;
   }
 }

@@ -138,7 +138,7 @@ export default function ProfilesPage({ profiles, reload }: Props) {
         <Form form={form} layout="vertical" initialValues={{ label: "我的 AstrBot", privateUserIds: [""], groupIds: [""] }}>
           <Form.Item name="label" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="wsUrl" label="OneBot WS 地址" rules={[{ required: true }]}><Input placeholder="ws://127.0.0.1:6199/ws" /></Form.Item>
-          <Form.Item name="accessToken" label="OneBot accessToken"><Input.Password /></Form.Item>
+          <Form.Item name="accessToken" label="OneBot accessToken"><Input.Password placeholder="留空表示不修改" autoComplete="new-password" /></Form.Item>
           <Form.Item name="selfId" label="Bot QQ / self_id" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item label="私聊对象 QQ" required>
             <Form.List name="privateUserIds">

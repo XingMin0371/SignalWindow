@@ -27,9 +27,9 @@ compressed cache after the first request.
 ```text
 Seeded history:          3000 messages
 Clients:                 10
-History page request:    40 messages each
+History page request:    30 messages each (historical run used 40)
 Responses:               10 / 10
-Returned per client:     40
+Returned per client:     30 (historical run used 40)
 Total response time:     11 ms
 ```
 
@@ -43,5 +43,6 @@ reliably.
 ## Known limits
 
 - The backend test uses text messages, not large media.
+- The recorded stress run did not cover the compaction threshold; a serialized add/compact regression test is now included in the test suite.
 - The fake upstream does not model AstrBot model latency.
 - Render FPS was not measured on physical Android hardware.

@@ -5,10 +5,10 @@
 - 网关默认监听 `127.0.0.1`，不会自动暴露公网。
 - 生产环境必须设置 `GATEWAY_TOKEN`。
 - 配置页只在通过 Token 后允许写入 profile。
-- OneBot accessToken 不会通过 `/api/config` 返回给浏览器。
+- OneBot accessToken 不会通过 `/api/config` 或 `/api/profiles/:id` 返回给浏览器；编辑时留空会沿用旧值。
 - 配置写入 `upstreams.json` 时使用临时文件替换，权限为 `0600`。
 - 静态文件路径使用 `path.resolve` + `path.relative`，拒绝目录穿越。
-- WebSocket 使用 HttpOnly 会话 Cookie 鉴权；旧版子协议 Token 兼容入口默认关闭。
+- WebSocket 使用 HttpOnly 会话 Cookie 鉴权；query token 和 `auth.*` 子协议 token 默认关闭，仅在显式环境变量开启时兼容。
 - 登录失败按来源 IP 做 60 秒 10 次限流。
 - 响应包含 CSP、`X-Frame-Options: DENY`、`nosniff`、Referrer-Policy、Permissions-Policy。
 - HTTPS 反向代理下由 Caddy/Tailscale 管理证书。
@@ -26,15 +26,15 @@
 
 ## 依赖许可证
 
-当前前端主要依赖：React、Refine、Ant Design、React Flow、CodeMirror、Recharts、Driver.js、Zod，均为 MIT 或 Apache-2.0 类宽松许可证。发布前应保留各自 LICENSE/NOTICE，并按实际锁定版本复核。
+当前前端主要依赖：React、Ant Design、React Flow、CodeMirror、Recharts、Driver.js、Zod，均为 MIT 或 Apache-2.0 类宽松许可证。发布前应保留各自 LICENSE/NOTICE，并按实际锁定版本复核。
 
 ## 性能与可用性防护
 
 - HTTP 请求头超时 10 秒，请求超时 15 秒，Keep-Alive 5 秒。
 - WebSocket 最大 100 个连接，每 IP 最多 20 个。
 - 单连接 10 秒最多 60 条消息。
-- 慢客户端 bufferedAmount 超过 8 MB 会被断开，超过 1 MB 时跳过广播。
-- 消息落盘使用 250ms 合并写入和原子替换，避免每条消息同步写盘。
+- 慢客户端 bufferedAmount 超过 1 MB 会被断开，客户端重连后重新拉取历史，避免静默丢消息。
+- 消息物化、追加和 compaction 在同一串行链中执行；compaction 使用临时文件原子替换。
 - OneBot 重连使用指数退避和随机抖动，最大 30 秒。
 - 前端按页面拆包，Ant Design、React Flow、CodeMirror、图表分别独立 chunk。
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.1 - 2026-11-13
+
+### 安全修复
+
+- 非回环 `HOST` 且未设置 `GATEWAY_TOKEN` 时拒绝启动；Docker Compose 强制要求 Token。
+- 修复上游 `params:null` 导致未捕获 Promise 拒绝和进程退出的问题；增加全局异常记录。
+- 收紧上游地址校验：字面私有/保留 IP、IPv6-mapped 元数据地址被拒绝；主机名默认需要 `UPSTREAM_HOST_ALLOWLIST`。
+- `/api/profiles/:id` 不再返回上游 `accessToken`；编辑留空会沿用旧值。
+- 统一上游消息 URL 白名单，拒绝 `javascript:`、HTML data URL 和 SVG data URL。
+- 默认关闭 `auth.*` 子协议 Token；query token 仍为显式开关。
+- 收紧 CJK 相关容器/环境：`.env` 权限、备份忽略规则、Docker 构建上下文和依赖锁。
+- 限制单条消息体积，NDJSON 启动改为流式读取；慢 WebSocket 客户端显式断开；媒体请求限速并改为流式响应。
+
+### 稳定性与测试
+
+- 消息物化、追加、compaction 串行执行，修复压缩窗口重复落盘。
+- 增加 OneBot 畸形参数、URL scheme、SSRF、压缩竞态的回归测试。
+- 修复 smoke test 的会话 Cookie 登录，测试套件 8/8 通过。
+
+### 已知边界
+
+- `HeightIndex` 在分页边界仍会 O(n) 重建；消息数组追加仍有数组复制成本。
+- `/api/profiles` 批量保存仍是逐实例写入，尚未合并为单次事务。
+- 远程图片仍可能触发第三方请求，CSP 的 `connect-src`/`img-src` 仍保留兼容范围。
+
 ## 0.2.0 - 2026-11-13
 
 ### 聊天窗口与渲染

@@ -1,4 +1,4 @@
-const CACHE = "signal-window-v2";
+const CACHE = "signal-window-v3";
 const CORE = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -20,13 +20,17 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(fetch(event.request).catch(() => caches.match("/")));
     return;
   }
+  const isHashedAsset = url.pathname.startsWith("/assets/");
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      if (response.ok && url.origin === location.origin) {
+    (isHashedAsset
+      ? caches.match(event.request).then((cached) => cached || fetch(event.request))
+      : fetch(event.request).catch(() => caches.match(event.request))
+    ).then((response) => {
+      if (response && response.ok && url.origin === location.origin) {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(event.request, copy));
       }
       return response;
-    })),
+    }),
   );
 });

@@ -60,7 +60,14 @@ test("gateway relays text and image to mock AstrBot", async () => {
 
   try {
     await waitFor("http://127.0.0.1:8788/api/health");
-    const ws = new WebSocket("ws://127.0.0.1:8788/ws?token=test");
+    const login = await fetch("http://127.0.0.1:8788/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "test" }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = String(login.headers.get("set-cookie") || "").split(";")[0];
+    const ws = new WebSocket("ws://127.0.0.1:8788/ws", { headers: { Cookie: cookie } });
     await waitForMessage(ws, (payload) => payload.type === "hello");
     const reply = waitForMessage(ws, (payload) => payload.type === "message" && payload.message.role === "assistant");
     ws.send(JSON.stringify({

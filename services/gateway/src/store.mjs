@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import readline from "node:readline";
 import path from "node:path";
 import crypto from "node:crypto";
 import { partsToText } from "./message.mjs";
@@ -9,6 +11,7 @@ const LEGACY_FILE = path.join(DATA_DIR, "messages.json");
 export const MEDIA_DIR = path.join(DATA_DIR, "media");
 const MAX_MESSAGES = Number(process.env.MAX_MESSAGES || 4000);
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const MAX_MESSAGE_BYTES = Number(process.env.MAX_MESSAGE_BYTES || 256 * 1024);
 const MAX_MEDIA_TOTAL_BYTES = Number(process.env.MAX_MEDIA_TOTAL_BYTES || 512 * 1024 * 1024);
 const MAX_MEDIA_FILES = Number(process.env.MAX_MEDIA_FILES || 5000);
 const COMPACT_EVERY_TRIMS = Number(process.env.COMPACT_EVERY_TRIMS || 500);
@@ -19,13 +22,18 @@ async function refreshMediaStats(force = false) {
   let bytes = 0;
   let files = 0;
   try {
-    for (const name of await fs.readdir(MEDIA_DIR)) {
-      try {
-        const stat = await fs.stat(path.join(MEDIA_DIR, name));
-        if (!stat.isFile()) continue;
+    const names = await fs.readdir(MEDIA_DIR);
+    // Bound concurrency while avoiding 5000 serial stat calls.
+    for (let index = 0; index < names.length; index += 64) {
+      const batch = names.slice(index, index + 64);
+      const stats = await Promise.all(batch.map(async (name) => {
+        try { return await fs.stat(path.join(MEDIA_DIR, name)); } catch { return null; }
+      }));
+      for (const stat of stats) {
+        if (!stat?.isFile()) continue;
         bytes += stat.size;
         files += 1;
-      } catch {}
+      }
     }
   } catch {}
   mediaState.bytes = bytes;
@@ -171,16 +179,23 @@ class Store {
 
   async _load() {
     if (await exists(FILE)) {
-      const raw = await fs.readFile(FILE, "utf8");
       const out = [];
-      for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const message = JSON.parse(line);
-          if (message && typeof message === "object") out.push(message);
-        } catch {
-          // Ignore a partially-written final line after an unclean shutdown.
+      const input = createReadStream(FILE, { encoding: "utf8" });
+      const lines = readline.createInterface({ input, crlfDelay: Infinity });
+      try {
+        for await (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const message = JSON.parse(line);
+            if (message && typeof message === "object") out.push(message);
+            if (out.length > MAX_MESSAGES * 2) out.splice(0, out.length - MAX_MESSAGES);
+          } catch {
+            // Ignore a partially-written final line after an unclean shutdown.
+          }
         }
+      } finally {
+        lines.close();
+        input.destroy();
       }
       return out.slice(-MAX_MESSAGES);
     }
@@ -216,8 +231,11 @@ class Store {
       const key = keyOf(message.profile || "main", message.conversation, message.targetId || "");
       const list = this.index.get(key);
       if (!list) continue;
-      const at = list.findIndex((item) => item.id === message.id);
-      if (at >= 0) list.splice(at, 1);
+      if (list[0]?.id === message.id) list.shift();
+      else {
+        const at = list.findIndex((item) => item.id === message.id);
+        if (at >= 0) list.splice(at, 1);
+      }
       if (!list.length) this.index.delete(key);
     }
   }
@@ -250,26 +268,46 @@ class Store {
   }
 
   async add({ profile = "main", conversation, targetId = "", role, parts, source = "web" }) {
-    const durableParts = await materializeParts(parts);
-    const message = {
-      id: `${Date.now()}-${++this.seq}`,
-      profile,
-      conversation,
-      targetId,
-      role,
-      parts: durableParts,
-      text: partsToText(durableParts),
-      source,
-      time: new Date().toISOString(),
-    };
-    this.messages.push(message);
-    this._index(message);
-    this._trim();
-    await this._append(message);
-    if (this.trimmed >= COMPACT_EVERY_TRIMS && !this.compacting) {
-      this._compactSoon();
-    }
-    return message;
+    // Keep materialization, memory mutation, append and compaction on one
+    // serialized chain. This prevents a snapshot from being followed by an
+    // older append of the same message.
+    this.writeChain = this.writeChain
+      .catch(() => {})
+      .then(async () => {
+        const durableParts = await materializeParts(parts);
+        const message = {
+          id: `${Date.now()}-${++this.seq}`,
+          profile,
+          conversation,
+          targetId,
+          role,
+          parts: durableParts,
+          text: partsToText(durableParts),
+          source,
+          time: new Date().toISOString(),
+        };
+        const line = `${JSON.stringify(message)}\n`;
+        if (Buffer.byteLength(line, "utf8") > MAX_MESSAGE_BYTES) {
+          throw new Error("message too large");
+        }
+        this.messages.push(message);
+        this._index(message);
+        this._trim();
+        const handle = await this._openHandle();
+        await handle.write(line);
+        if (this.trimmed >= COMPACT_EVERY_TRIMS && !this.compacting) {
+          this.compacting = true;
+          try {
+            await this._writeSnapshot();
+            await this._pruneMedia();
+            this.trimmed = 0;
+          } finally {
+            this.compacting = false;
+          }
+        }
+        return message;
+      });
+    return this.writeChain;
   }
 
   async importHistorical(records, targetId) {
@@ -293,34 +331,7 @@ class Store {
     return this.writeChain;
   }
 
-    _append(message) {
-    const line = `${JSON.stringify(message)}\n`;
-    this.writeChain = this.writeChain
-      .catch(() => {})
-      .then(async () => {
-        const handle = await this._openHandle();
-        await handle.write(line);
-      });
-    return this.writeChain;
-  }
-
-  _compactSoon() {
-    this.compacting = true;
-    this.writeChain = this.writeChain
-      .catch(() => {})
-      .then(async () => {
-        await this._writeSnapshot();
-        await this._pruneMedia();
-        this.trimmed = 0;
-        this.compacting = false;
-      })
-      .catch((error) => {
-        this.compacting = false;
-        console.error("store compact failed", error);
-      });
-  }
-
-  async _writeSnapshot() {
+    async _writeSnapshot() {
     if (this.fileHandle) {
       await this.fileHandle.close();
       this.fileHandle = null;

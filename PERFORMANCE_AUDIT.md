@@ -17,7 +17,7 @@
 | 3000-message history / 10 clients | 10 pages in 11 ms |
 | History loaded for every target at connect | lazy load for the selected conversation only |
 | Long DOM | windowed rendering with measured rows and overscan |
-| O(n) height offsets on each measurement | block-decomposed height index (O(√n) updates/lookup) |
+| O(n) height offsets on each measurement | block-decomposed height index; block updates/lookup are O(√n), page-boundary construction is still O(n) |
 | Repeated static compression | bounded in-memory compressed asset cache |
 | Blocking browser storage | safe localStorage wrapper with memory fallback |
 | Uncompressed static assets | gzip/brotli for text assets |
@@ -81,10 +81,10 @@ Ant Design remains the largest shared chunk. Further reduction would require rep
 ## Residual risks
 
 1. The initial Ant Design chunk is still large on slow mobile networks.
-2. The chat log is not fully virtualized; only the active conversation's capped history is rendered, with browser content-visibility used for off-screen rows.
+2. The chat log uses windowed rendering; rebuilding block metadata at a page boundary is still O(n).
 3. Media files are retained unless manually cleaned; message metadata remains capped.
 4. Media has a 512 MiB / 5000-file default quota and unreferenced files are pruned after compaction.
-4. Recharts and CodeMirror are loaded only on their pages, but they are still sizable.
+5. Recharts and CodeMirror are loaded only on their pages, but they are still sizable.
 
 ## Verification
 

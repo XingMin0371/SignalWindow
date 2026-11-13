@@ -4,3 +4,7 @@ data
 .git
 tests
 *.log
+.env*
+*.bak
+config/
+config/*.bak

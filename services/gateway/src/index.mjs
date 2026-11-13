@@ -1,6 +1,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzip, brotliCompress, constants as zlibConstants } from "node:zlib";
@@ -17,6 +18,7 @@ const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const TOKEN = process.env.GATEWAY_TOKEN || "";
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const SESSION_COOKIE = "slw_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
@@ -48,8 +50,12 @@ function broadcast(payload) {
   const data = JSON.stringify(payload);
   for (const ws of clients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    if (ws.bufferedAmount > 8 * 1024 * 1024) { ws.terminate(); continue; }
-    if (ws.bufferedAmount < 1024 * 1024) ws.send(data);
+    if (ws.bufferedAmount > 1024 * 1024) {
+      console.warn("[broadcast] slow client terminated", { buffered: ws.bufferedAmount });
+      ws.terminate();
+      continue;
+    }
+    ws.send(data);
   }
 }
 function broadcastProfiles() {
@@ -86,7 +92,9 @@ function startClient(profile) {
   client.start();
 }
 function addProfile(raw) {
-  const profile = normalizeProfile(raw, profileMap.size);
+  const existing = profileMap.get(String(raw?.id || ""));
+  const input = existing && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
+  const profile = normalizeProfile(input, profileMap.size);
   profileMap.set(profile.id, profile);
   profiles = [...profileMap.values()];
   startClient(profile);
@@ -105,11 +113,19 @@ for (const profile of profiles) {
   startClient(profile);
 }
 
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    if (forwarded) return forwarded;
+  }
+  return req.socket.remoteAddress || "unknown";
+}
+
 const authFailures = new Map();
 const apiRates = new Map();
 
 function apiRateLimited(req, limit = 120, windowMs = 10_000, bucket = "api") {
-  const ip = req.socket.remoteAddress || "unknown";
+  const ip = clientIp(req);
   const key = `${bucket}:${ip}`;
   const now = Date.now();
   const recent = (apiRates.get(key) || []).filter((time) => now - time < windowMs);
@@ -124,7 +140,7 @@ function safeEqual(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 function rateLimited(req) {
-  const key = req.socket.remoteAddress || "unknown";
+  const key = clientIp(req);
   const now = Date.now();
   const recent = (authFailures.get(key) || []).filter((time) => now - time < 60_000);
   if (recent.length >= 10) { authFailures.set(key, recent); return true; }
@@ -132,7 +148,7 @@ function rateLimited(req) {
   return false;
 }
 function noteAuthFailure(req) {
-  const key = req.socket.remoteAddress || "unknown";
+  const key = clientIp(req);
   const now = Date.now();
   const recent = (authFailures.get(key) || []).filter((time) => now - time < 60_000);
   recent.push(now);
@@ -150,7 +166,7 @@ function cookieValue(req, name) {
 function createSession(req, res) {
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, Date.now() + SESSION_TTL_MS);
-  const secure = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+  const secure = TRUST_PROXY && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
   res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
 }
 function clearSession(req, res) {
@@ -207,7 +223,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   if (String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https") {
@@ -264,7 +280,10 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
-      const profile = normalizeProfile(body.profile || body, 0);
+      const incoming = body.profile || body;
+      const existing = profileMap.get(String(incoming?.id || ""));
+      const merged = existing && !incoming.accessToken ? { ...incoming, accessToken: existing.accessToken } : incoming;
+      const profile = normalizeProfile(merged, 0);
       const result = await new Promise((resolve) => {
         const socket = new WebSocket(profile.wsUrl, {
           headers: {
@@ -284,14 +303,16 @@ const server = http.createServer(async (req, res) => {
         });
         socket.on("error", (error) => {
           clearTimeout(timer);
-          resolve({ ok: false, detail: error.message });
+          console.error("[profile-test]", error.message);
+          resolve({ ok: false, detail: "connection failed" });
         });
       });
       res.writeHead(result.ok ? 200 : 502, { "content-type": "application/json" });
       res.end(JSON.stringify(result));
     } catch (error) {
+      console.error("[profile-test]", error.message);
       res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: false, detail: error.message }));
+      res.end(JSON.stringify({ ok: false, detail: "invalid profile" }));
     }
     return;
   }
@@ -337,7 +358,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-    res.end(JSON.stringify(profile));
+    res.end(JSON.stringify({ ...publicProfile(profile), wsUrl: profile.wsUrl, accessToken: "" }));
     return;
   }
 
@@ -417,6 +438,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname.startsWith("/api/media/")) {
+    if (apiRateLimited(req, 600, 10_000, "media")) {
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "too many requests" }));
+      return;
+    }
     if (!authorized(req)) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
@@ -427,7 +453,9 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(404); res.end("not found"); return;
     }
     try {
-      const body = await fs.readFile(path.join(MEDIA_DIR, name));
+      const mediaPath = path.join(MEDIA_DIR, name);
+      const stat = await fs.stat(mediaPath);
+      if (!stat.isFile()) throw new Error("not a file");
       const ext = path.extname(name).slice(1).toLowerCase();
       const types = {
         jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
@@ -438,8 +466,12 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         "content-type": types[ext] || "application/octet-stream",
         "cache-control": "public, max-age=31536000, immutable",
+        "content-length": stat.size,
       });
-      res.end(body);
+      const stream = createReadStream(mediaPath);
+      stream.on("error", () => res.destroy());
+      res.on("close", () => stream.destroy());
+      stream.pipe(res);
     } catch {
       res.writeHead(404); res.end("not found");
     }
@@ -545,7 +577,7 @@ wsHeartbeat.unref();
 
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url, "http://localhost");
-  const ip = req.socket.remoteAddress || "unknown";
+  const ip = clientIp(req);
   const ipCount = [...clients].filter((client) => client.remoteAddress === ip).length;
   if (clients.size >= MAX_CLIENTS || ipCount >= MAX_CLIENTS_PER_IP || !originAllowed(req)) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -553,7 +585,9 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
   const protocols = String(req.headers["sec-websocket-protocol"] || "").split(",").map((v) => v.trim());
-  const protocolToken = protocols.find((value) => value.startsWith("auth."))?.slice(5) || "";
+  const protocolToken = process.env.ALLOW_PROTOCOL_TOKEN === "1"
+    ? protocols.find((value) => value.startsWith("auth."))?.slice(5) || ""
+    : "";
   let decodedProtocolToken = "";
   try { decodedProtocolToken = protocolToken ? Buffer.from(protocolToken, "base64url").toString("utf8") : ""; } catch {}
   const supplied = decodedProtocolToken || (process.env.ALLOW_QUERY_TOKEN === "1" ? url.searchParams.get("token") || "" : "");
@@ -595,6 +629,10 @@ server.on("upgrade", (req, socket, head) => {
       }
       if (payload.type !== "send") return;
       const clientId = String(payload.clientId || "");
+      if (clientId && !/^[A-Za-z0-9_-]{1,128}$/.test(clientId)) {
+        ws.send(JSON.stringify({ type: "error", clientId: "", detail: "invalid clientId" }));
+        return;
+      }
       if (clientId && recentSendIds.has(clientId)) {
         ws.send(JSON.stringify({ type: "ack", clientId }));
         return;
@@ -646,12 +684,23 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
+const loopbackHost = ["127.0.0.1", "::1", "localhost"].includes(HOST);
+if (!TOKEN && !loopbackHost) {
+  console.error("GATEWAY_TOKEN is required when HOST is not loopback");
+  process.exit(1);
+}
+process.on("unhandledRejection", (error) => console.error("unhandled rejection", error));
+process.on("uncaughtException", (error) => console.error("uncaught exception", error));
+
 await store.init();
 server.listen(PORT, HOST, () => {
   console.log(`signal-window gateway http://${HOST}:${PORT}`);
-  console.log(`profiles ${profiles.map((p) => `${p.id}->${p.wsUrl}`).join(", ") || "none; waiting for setup"}`);
+  console.log(`profiles ${profiles.map((p) => p.id).join(", ") || "none; waiting for setup"}`);
   if (process.env.ALLOW_QUERY_TOKEN === "1") {
     console.warn("SECURITY WARNING: ALLOW_QUERY_TOKEN=1 puts the gateway token in URLs and proxy logs; use the HttpOnly session cookie or Authorization header instead.");
+  }
+  if (process.env.ALLOW_PROTOCOL_TOKEN === "1") {
+    console.warn("SECURITY WARNING: ALLOW_PROTOCOL_TOKEN=1 enables the legacy auth subprotocol token; prefer the HttpOnly session cookie.");
   }
 });
 

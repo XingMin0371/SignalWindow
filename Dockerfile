@@ -1,18 +1,22 @@
 FROM node:24-alpine AS web
+RUN corepack enable && corepack prepare pnpm@11.28.5 --activate
 WORKDIR /build/apps/web
-COPY apps/web/package.json ./
-RUN npm install --no-audit --no-fund
+COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY apps/web ./
-RUN npm run build
+RUN pnpm run build
 
 FROM node:24-alpine
+RUN corepack enable && corepack prepare pnpm@11.28.5 --activate
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
 COPY services ./services
 COPY apps ./apps
 COPY --from=web /build/apps/web/dist ./apps/web/dist
+ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=8787
 EXPOSE 8787
+USER node
 CMD ["node", "services/gateway/src/index.mjs"]

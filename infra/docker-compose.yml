@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
-      GATEWAY_TOKEN: ${GATEWAY_TOKEN:-}
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN:?请在 .env 中设置 GATEWAY_TOKEN}
       PORT: "8787"
       DATA_DIR: /app/data
       UPSTREAMS_FILE: /app/config/upstreams.json

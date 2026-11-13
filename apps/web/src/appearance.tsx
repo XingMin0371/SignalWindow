@@ -77,38 +77,49 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 export async function loadStoredBackground(): Promise<StoredBackground | null> {
+  let db: IDBDatabase | null = null;
   try {
-    const db = await openDatabase();
+    db = await openDatabase();
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readonly");
+      const tx = db!.transaction(STORE_NAME, "readonly");
       const request = tx.objectStore(STORE_NAME).get(RECORD_KEY);
       request.onsuccess = () => resolve((request.result as StoredBackground) || null);
       request.onerror = () => reject(request.error);
     });
   } catch {
     return null;
+  } finally {
+    db?.close();
   }
 }
 
 export async function saveStoredBackground(value: StoredBackground): Promise<void> {
   const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(value, RECORD_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).put(value, RECORD_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
   window.dispatchEvent(new Event("signal-appearance"));
 }
 
 export async function removeStoredBackground(): Promise<void> {
   const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(RECORD_KEY);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).delete(RECORD_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
   window.dispatchEvent(new Event("signal-appearance"));
 }
 
@@ -176,18 +187,17 @@ function cropGeometry(image: HTMLImageElement, aspect: number, targetWidth: numb
   };
 }
 
-const cropImages = new Map<string, HTMLImageElement>();
+let cropImageCache: { url: string; image: HTMLImageElement } | null = null;
 
 async function cropImage(sourceUrl: string): Promise<HTMLImageElement> {
-  const cached = cropImages.get(sourceUrl);
-  if (cached) return cached;
+  if (cropImageCache?.url === sourceUrl) return cropImageCache.image;
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
     element.onload = () => resolve(element);
     element.onerror = () => reject(new Error("图片无法读取"));
     element.src = sourceUrl;
   });
-  cropImages.set(sourceUrl, image);
+  cropImageCache = { url: sourceUrl, image };
   return image;
 }
 

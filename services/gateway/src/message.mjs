@@ -1,5 +1,18 @@
+const MAX_INLINE_URL = 3_000_000;
+
 function textPart(text) {
   return { type: "text", text: String(text ?? "") };
+}
+
+function safeUrl(url, kind) {
+  const value = String(url || "").trim();
+  if (!value || value.length > 7_000_000) return "";
+  if (/^javascript:|^vbscript:|^data:text\/html|^data:image\/svg/i.test(value)) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  if (kind === "image" && /^data:image\/(?:png|jpe?g|gif|webp|bmp)[;,]|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
+  if (kind === "file" && /^data:(?:application|audio|video|font)\/(?!svg)|^data:text\/(?!html)|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
+  if ((kind === "audio" || kind === "video") && /^data:(?:audio|video)\//i.test(value)) return value;
+  return "";
 }
 
 export function normalizeMessage(message) {
@@ -19,7 +32,8 @@ export function normalizeMessage(message) {
       const data = raw.data && typeof raw.data === "object" ? raw.data : {};
       let url = String(data.url ?? data.file ?? raw.url ?? "");
       if (url.startsWith("base64://")) url = `data:image/png;base64,${url.slice(9)}`;
-      if (url && url.length <= 7_000_000 && !/^data:image\/svg/i.test(url)) parts.push({ type: "image", url, alt: String(data.summary ?? "图片").slice(0, 100) });
+      url = safeUrl(url, "image");
+      if (url) parts.push({ type: "image", url, alt: String(data.summary ?? "图片").slice(0, 100) });
       else if (raw.type === "mface") parts.push({ type: "face", name: String(data.summary ?? "表情").slice(0, 50) });
       continue;
     }
@@ -27,21 +41,24 @@ export function normalizeMessage(message) {
       const data = raw.data && typeof raw.data === "object" ? raw.data : {};
       let url = String(data.url ?? data.file ?? raw.url ?? "");
       if (url.startsWith("base64://")) url = `data:audio/mpeg;base64,${url.slice(9)}`;
-      if (url && url.length <= 7_000_000) parts.push({ type: "audio", url, name: String(data.name ?? "语音").slice(0, 100) });
+      url = safeUrl(url, "audio");
+      if (url) parts.push({ type: "audio", url, name: String(data.name ?? "语音").slice(0, 100) });
       continue;
     }
     if (raw.type === "video") {
       const data = raw.data && typeof raw.data === "object" ? raw.data : {};
       let url = String(data.url ?? data.file ?? raw.url ?? "");
       if (url.startsWith("base64://")) url = `data:video/mp4;base64,${url.slice(9)}`;
-      if (url && url.length <= 7_000_000) parts.push({ type: "video", url, name: String(data.name ?? "视频").slice(0, 100) });
+      url = safeUrl(url, "video");
+      if (url) parts.push({ type: "video", url, name: String(data.name ?? "视频").slice(0, 100) });
       continue;
     }
     if (raw.type === "file") {
       const data = raw.data && typeof raw.data === "object" ? raw.data : {};
       const url = String(data.url ?? data.file ?? raw.url ?? "");
       const name = String(data.name ?? raw.name ?? "文件").slice(0, 120);
-      if (url && url.length <= 7_000_000) parts.push({ type: "file", url, name, mime: String(data.mime ?? "").slice(0, 100) });
+      const safe = safeUrl(url, "file");
+      if (safe) parts.push({ type: "file", url: safe, name, mime: String(data.mime ?? "").slice(0, 100) });
       continue;
     }
     if (raw.type === "face" || raw.type === "mface") {
@@ -94,7 +111,7 @@ export function sanitizeParts(parts) {
       if (text) out.push(textPart(text));
     } else if (part.type === "image") {
       const url = String(part.url ?? "");
-      if (url.length <= 2_000_000 && /^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp)[;,])/i.test(url)) {
+      if (url.length <= MAX_INLINE_URL && /^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp)[;,])/i.test(url)) {
         out.push({ type: "image", url, alt: String(part.alt ?? "图片").slice(0, 100) });
       }
     } else if (part.type === "file") {
