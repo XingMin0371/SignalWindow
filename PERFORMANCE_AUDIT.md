@@ -17,7 +17,7 @@
 | 3000-message history / 10 clients | 10 pages in 11 ms |
 | History loaded for every target at connect | lazy load for the selected conversation only |
 | Long DOM | windowed rendering with measured rows and overscan |
-| O(n) height offsets on each measurement | block-decomposed height index; block updates/lookup are O(√n), page-boundary construction is still O(n) |
+| O(n) height offsets on each measurement | Fenwick height index; append/prepend/update/locate/topAt are O(log n) |
 | Repeated static compression | bounded in-memory compressed asset cache |
 | Blocking browser storage | safe localStorage wrapper with memory fallback |
 | Uncompressed static assets | gzip/brotli for text assets |

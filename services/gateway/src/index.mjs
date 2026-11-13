@@ -2,7 +2,7 @@ import "./env.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzip, brotliCompress, constants as zlibConstants } from "node:zlib";
@@ -18,6 +18,7 @@ import { importAvailable, importPrivateHistory, listPrivateSessions } from "./as
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
+const PACKAGE_VERSION = JSON.parse(readFileSync(path.resolve(__dirname, "../../../package.json"), "utf8")).version;
 function envInt(name, fallback, min, max) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -525,6 +526,7 @@ const server = http.createServer(async (req, res) => {
       onebot: visible && [...onebots.values()].some((client) => client.connected),
       onebots: visible ? Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])) : {},
       service: "signal-window",
+      version: PACKAGE_VERSION,
     }));
     return;
   }

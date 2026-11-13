@@ -1,0 +1,51 @@
+name: CI
+# 最小可落地门禁：测试 / 类型 / 依赖漏洞 / 前端构建 / 换行与锁文件一致性。
+# 使用 Node 自带的 npm，避免 CI 环境缺 pnpm；与 scripts/start.mjs 的回退策略一致。
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 网关依赖
+        run: npm install --no-audit --no-fund
+      - name: 单元测试
+        run: npm test
+      - name: 根依赖漏洞
+        run: npm audit --omit=dev
+      - name: 前端依赖
+        working-directory: apps/web
+        run: npm install --no-audit --no-fund
+      - name: 前端依赖漏洞
+        working-directory: apps/web
+        run: npm audit --omit=dev
+      - name: TypeScript 严格检查
+        working-directory: apps/web
+        run: npx tsc --noEmit
+      - name: 前端构建
+        working-directory: apps/web
+        run: npm run build
+      - name: 锁文件与 manifest 一致性
+        run: |
+          node -e "
+          const fs=require('fs');
+          const pkg=JSON.parse(fs.readFileSync('apps/web/package.json','utf8'));
+          const lock=fs.readFileSync('apps/web/pnpm-lock.yaml','utf8');
+          for (const name of Object.keys(pkg.dependencies||{})) {
+            if (!lock.includes('      '+name+':') && !lock.includes('      \"'+name+'\":')) {
+              console.error('锁文件缺少依赖声明: '+name); process.exit(1);
+            }
+          }
+          console.log('锁文件与 package.json 依赖声明一致');
+          "
+      - name: 换行符不被 autocrlf 改写
+        run: |
+          if grep -q $'\r' start-linux.sh Dockerfile; then
+            echo "Linux 启动脚本 / Dockerfile 必须是 LF"; exit 1
+          fi
+          echo "EOL 检查通过"

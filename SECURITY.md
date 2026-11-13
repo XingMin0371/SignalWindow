@@ -26,7 +26,7 @@
 
 ## 依赖许可证
 
-当前前端主要依赖：React、Ant Design、React Flow、CodeMirror、Recharts、Driver.js、Zod，均为 MIT 或 Apache-2.0 类宽松许可证。发布前应保留各自 LICENSE/NOTICE，并按实际锁定版本复核。
+当前前端主要依赖：React、Ant Design、React Flow、CodeMirror、Recharts、Driver.js，均为 MIT 或 Apache-2.0 类宽松许可证。发布前应保留各自 LICENSE/NOTICE，并按实际锁定版本复核。
 
 ## 性能与可用性防护
 

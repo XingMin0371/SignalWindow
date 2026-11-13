@@ -20,7 +20,7 @@
 
 ## 仍然存在的边界
 
-- 前端使用增量 `SqrtHeightIndex`，但块级重建仍是 O(块数)；尚未替换为 Fenwick O(log n) 版本，消息数组不可变追加仍会复制当前会话数组。
+- 前端使用 Fenwick O(log n) 高度索引；消息数组不可变追加仍会复制当前会话数组。
 - CSP 的 `connect-src`/`img-src` 仍保留 `ws:`/`https:` 兼容范围；没有做远程图片代理。
 - 文件内容魔数校验、NDJSON → SQLite WAL、Docker 基础镜像 digest 未实现。
 - 会话已有登录轮换和 `all=1` 吊销，但没有审计日志和自动化吊销策略。
@@ -42,7 +42,7 @@
 - N-09：SW 离线回退返回 504，不再把 undefined 交给 respondWith。
 - N-10：快照 fsync，Windows rename 重试；trim 仍是数组移动。
 - N-11：运行镜像只包含 dist，基础镜像摘要仍未固定。
-- v0.2.3：增量高度索引完成；仍未清零 profile 批量保存、CSP 宽范围、Cookie 全端吊销、CI/SAST。
+- v0.2.3：增量高度索引完成；profile 批量保存、Cookie 全端吊销、CI 已在后续版本补齐，CSP 仍保留兼容范围。
 
 ## v0.2.4 低风险整合
 
@@ -52,7 +52,7 @@
 - A-4：DATA_DIR 单实例锁，含容器 PID1 陈旧锁处理。
 - A-5：致命异常软硬分级。
 - A-7：gap 仅重同步当前会话。
-- B.2：常驻 SqrtHeightIndex，随机等价测试通过。
+- B.2：高度索引先前为 SqrtHeightIndex，v0.2.7 已替换为 Fenwick O(log n)。
 - G.4：profile 保存改为 PUT 单事务校验与一次写盘。
 - 静态 ETag/304、会话轮换/全端吊销。
 
@@ -78,3 +78,9 @@
 - 历史分页哈希索引已合入，分页与 trim 等价性测试通过。
 - SW 安装 allSettled、ready 等待、文件 input reset。
 - 组提交、SQLite、echo、缩略图、请求指标、外部 store 仍未合并。
+
+## v0.2.8 版本一致性
+
+- 包、README、CHANGELOG、发布 tag 统一为 0.2.8。
+- `/api/health` 返回运行版本，便于确认实际部署版本。
+- 修正 Fenwick/Zod/性能文档的旧描述。

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.8 - 2026-11-13
+
+### 版本一致性
+
+- 包、README、CHANGELOG、tag 统一为 0.2.8。
+- `/api/health` 增加 `version` 字段，直接显示当前运行版本。
+- 修正 `AUDIT_RESPONSE` 中 Fenwick 未替换的旧描述。
+- 修正 `SECURITY.md` 仍列 Zod 的旧依赖清单。
+- 修正 `PERFORMANCE_AUDIT.md` 的 O(√n)/O(n) 高度索引描述。
+
 ## 0.2.7 - 2026-11-13
 
 ### 文档剩余优化整合
