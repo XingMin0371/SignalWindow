@@ -392,7 +392,7 @@ html.has-video-background .chat-page::before { display: none; }
   display: grid;
   place-items: center;
 }
-.crop-stage img { width: 100%; height: 100%; object-fit: cover; transform-origin: center; display: block; }
+.crop-stage img, .crop-stage canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
 .crop-guide {
   position: absolute;
   inset: 0;

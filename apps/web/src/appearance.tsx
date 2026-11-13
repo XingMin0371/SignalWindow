@@ -159,6 +159,68 @@ export async function validateBackgroundVideo(file: File): Promise<void> {
   }
 }
 
+/** Shared crop geometry for both preview and saved output. */
+function cropGeometry(image: HTMLImageElement, aspect: number, targetWidth: number, zoom: number, x: number, y: number) {
+  const targetHeight = Math.max(1, Math.round(targetWidth / Math.max(0.5, aspect)));
+  const scale = Math.max(targetWidth / image.naturalWidth, targetHeight / image.naturalHeight) * Math.max(1, zoom);
+  const cropWidth = Math.min(image.naturalWidth, targetWidth / scale);
+  const cropHeight = Math.min(image.naturalHeight, targetHeight / scale);
+  const maxX = Math.max(0, image.naturalWidth - cropWidth);
+  const maxY = Math.max(0, image.naturalHeight - cropHeight);
+  return {
+    targetHeight,
+    cropWidth,
+    cropHeight,
+    sourceX: Math.min(maxX, Math.max(0, maxX / 2 + x * maxX / 2)),
+    sourceY: Math.min(maxY, Math.max(0, maxY / 2 + y * maxY / 2)),
+  };
+}
+
+const cropImages = new Map<string, HTMLImageElement>();
+
+async function cropImage(sourceUrl: string): Promise<HTMLImageElement> {
+  const cached = cropImages.get(sourceUrl);
+  if (cached) return cached;
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => reject(new Error("图片无法读取"));
+    element.src = sourceUrl;
+  });
+  cropImages.set(sourceUrl, image);
+  return image;
+}
+
+/** Exact preview used by the crop editor; the saved output uses the same geometry. */
+export async function drawCropPreview(
+  canvas: HTMLCanvasElement,
+  sourceUrl: string,
+  aspect: number,
+  zoom: number,
+  x: number,
+  y: number,
+): Promise<void> {
+  const image = await cropImage(sourceUrl);
+  const width = 640;
+  const geometry = cropGeometry(image, aspect, width, zoom, x, y);
+  canvas.width = width;
+  canvas.height = geometry.targetHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("浏览器不支持图片裁切");
+  context.clearRect(0, 0, width, geometry.targetHeight);
+  context.drawImage(
+    image,
+    geometry.sourceX,
+    geometry.sourceY,
+    geometry.cropWidth,
+    geometry.cropHeight,
+    0,
+    0,
+    width,
+    geometry.targetHeight,
+  );
+}
+
 /** One canvas crop, only when the user saves a custom crop. */
 export async function cropBackgroundBlob(
   sourceUrl: string,
@@ -167,27 +229,25 @@ export async function cropBackgroundBlob(
   x: number,
   y: number,
 ): Promise<Blob> {
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const element = new Image();
-    element.onload = () => resolve(element);
-    element.onerror = () => reject(new Error("图片无法读取"));
-    element.src = sourceUrl;
-  });
+  const image = await cropImage(sourceUrl);
   const targetWidth = 1280;
-  const targetHeight = Math.max(1, Math.round(targetWidth / Math.max(0.5, aspect)));
-  const scale = Math.max(targetWidth / image.naturalWidth, targetHeight / image.naturalHeight) * Math.max(1, zoom);
-  const cropWidth = Math.min(image.naturalWidth, targetWidth / scale);
-  const cropHeight = Math.min(image.naturalHeight, targetHeight / scale);
-  const maxX = Math.max(0, image.naturalWidth - cropWidth);
-  const maxY = Math.max(0, image.naturalHeight - cropHeight);
-  const sourceX = Math.min(maxX, Math.max(0, maxX / 2 + x * maxX / 2));
-  const sourceY = Math.min(maxY, Math.max(0, maxY / 2 + y * maxY / 2));
+  const geometry = cropGeometry(image, aspect, targetWidth, zoom, x, y);
   const canvas = document.createElement("canvas");
   canvas.width = targetWidth;
-  canvas.height = targetHeight;
+  canvas.height = geometry.targetHeight;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("浏览器不支持图片裁切");
-  context.drawImage(image, sourceX, sourceY, cropWidth, cropHeight, 0, 0, targetWidth, targetHeight);
+  context.drawImage(
+    image,
+    geometry.sourceX,
+    geometry.sourceY,
+    geometry.cropWidth,
+    geometry.cropHeight,
+    0,
+    0,
+    targetWidth,
+    geometry.targetHeight,
+  );
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.82));
   if (blob) return blob;
   const jpeg = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.84));

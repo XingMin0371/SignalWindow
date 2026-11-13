@@ -2,17 +2,79 @@
 
 ## 0.2.0 - 2026-11-13
 
-## 2026-11-12
+### 聊天窗口与渲染
 
-- Private history import is now user-selected in Settings; automatic import removed. Scroll loading uses 30 per page, idle-triggered auto-load, and anchored scroll restoration.
-- Added one-shot read-only importer for AstrBot private history; group history is not imported.
-- Fixed CSP for local blob backgrounds, guarded localStorage, added ES2017/Safari 12 build target, full Lite blur fallback, block-decomposed height index, batched message appends, static compression cache, and safer legacy history lookup.
-- Fixed the capped-history index rebuild hotspot; stress test: 10 clients / 400 messages, ack average 4 ms, p95 8 ms; 3000-message history for 10 clients in 11 ms.
-- Added measured virtual chat rows, incremental history paging, and frame-batched message updates.
-- Added WebSocket reconnect, send queue, acknowledgement, and idempotency.
-- Added NDJSON message store, content-addressed media, media quota, and compaction cleanup.
-- Added gzip/brotli static assets and API rate limits.
-- Added low-power default/glass/transparent themes and local static/dynamic backgrounds.
-- Added Lite mode, Windows/Linux launchers, Android PWA guidance, compatibility and standards documents.
-- Removed unused Refine runtime, demo config, unused OneBot sequence, and unused imports.
+- 聊天消息改为按窗口虚拟渲染，只挂载视口附近的消息，避免长会话把整段 DOM 全部渲染出来。
+- 行高改为实际测量，并用分块高度索引更新位置；图片、文件或视频加载后再测量，减少滚动错位。
+- 新消息按 `requestAnimationFrame` 合并，避免每条消息都触发一次完整渲染。
+- 消息行和消息片段做 memo 化，减少无关重绘。
+- 时间格式化加入缓存，避免同一时间字符串反复 `toLocaleTimeString`。
+- 图片加入懒加载；旧浏览器不支持 `ResizeObserver` 时回退到固定行高和媒体加载补测。
+- 聊天窗口支持背景图按面板尺寸显示，不再使用全屏 fixed 背景。
+- 新增背景适配：铺满、完整显示、自定义裁切。
+- 自定义裁切使用最近的聊天窗口宽高比，预览与保存共用同一套 Canvas 几何计算。
+- 新增动态背景（MP4/WebM），限制 8 秒、1280×720、8MB，默认关闭自动播放，切后台暂停。
+- 新增 Lite 模式，关闭动画、过渡、阴影和大面积毛玻璃，降低旧设备开销。
+- 增加默认、烟熏玻璃、透明三种聊天主题。
+- 玻璃和透明模式共用统一气泡质感，发送者仅通过左右对齐区分。
+- 增加按时段变化的侧向暖光，清晨偏黄、正午偏白、夜间变暗偏冷，每小时更新。
+- 图片背景降低侧光强度，视频背景完全关闭侧光。
+- 增加透明模式局部玻璃反射、工具栏和输入区可读性遮罩。
 
+### 历史记录与分页
+
+- 历史改为按会话懒加载，不再在连接时为每个私聊/群聊加载全部历史。
+- 每页 30 条，滚动到顶部附近并停止 80ms 后自动加载；加载完成后冷却 200ms。
+- 保留“加载更早”按钮作为手动兜底。
+- 使用消息 ID 锚点恢复滚动位置，关闭浏览器自动 scroll anchoring，减少顶部插入时的抖动。
+- 服务端 `beforeId` 分页只复制当前页，不再先复制整段更早历史。
+- 历史分页带有过期请求保护，切换会话后旧请求不会覆盖新会话。
+- 设置页新增历史导入：用户自己选择私聊会话，服务端只读 AstrBot SQLite，不自动导入，不导入群聊。
+
+### 发送、连接与稳定性
+
+- WebSocket 支持指数退避自动重连和心跳。
+- 发送加入 pending 队列、`clientId` 确认和短时幂等。
+- 输入框只在服务端 ack 后清空；发送失败会保留输入并提示。
+- 网关增加单客户端消息队列、消息速率限制、客户端数量和单 IP 限制。
+- 服务端增加 ping/pong 死连接清理。
+- 消息存储改为追加式 NDJSON，不再每条消息重写完整 JSON。
+- 增加有界静态资源压缩缓存、gzip/brotli、TCP_NODELAY 和 HTTP 超时。
+- 增加 API 请求限流、登录失败限流和 profile 测试限流。
+
+### 存储、媒体与数据完整性
+
+- 消息存储改为追加文件句柄，定期 compact，启动时保留旧格式迁移备份。
+- 消息索引按会话维护；达到上限时只移除被淘汰消息的索引，不再全量重建。
+- 图片/文件从消息 JSON 中拆出，写入 `data/media`，通过认证的 `/api/media` 提供服务。
+- 媒体支持单文件、总容量和文件数限制，compact 后清理未引用文件。
+- 修复持久文件句柄重复打开、优雅关闭和写入失败路径。
+- 保留 AstrBot 的 UMO、`self_id`、`group_id`、`user_id`、`sender` 和消息顺序契约。
+
+### 安全与浏览器兼容
+
+- 修复用户背景图的 CSP：允许同源 `blob:` 图片和媒体，不允许脚本或任意网络源。
+- 使用安全的 localStorage 封装，Safari 隐私模式和受限 WebView 不再因存储异常崩溃。
+- Vite 生产目标调整为 ES2017 / Safari 12 基线。
+- Lite 模式关闭全部 `backdrop-filter` 和装饰性网格背景。
+- 拒绝 SVG 图片、HTML data URL 和路径穿越。
+- 增加可选 `UPSTREAM_HOST_ALLOWLIST`，限制 OneBot 上游主机。
+- 保留 `ALLOW_QUERY_TOKEN` 兼容开关，但默认关闭并在启用时输出安全警告。
+- Windows、Linux 增加启动器；Android 提供 PWA 使用说明。
+- OneBot payload 抽成纯函数，增加群聊/私聊字段回归测试。
+- 增加兼容性、标准、架构、性能、压力测试、隐私和部署文档。
+
+### 工程与构建
+
+- 移除 Refine 运行时和不必要的依赖。
+- 拆分 OneBot 事件构造、导入器、存储和网关职责。
+- 清理未使用的 OneBot sequence、未使用 import 和演示配置。
+- 静态资源按产物的 mtime/size 做有界压缩缓存。
+- 增加源码包、版本号、隐私扫描和 GitHub Release 流程。
+
+### 已知边界
+
+- 真实 AstrBot 端到端和 Android 旧浏览器视觉表现仍需在真实设备上验收。
+- 动态视频背景不做自定义裁切。
+- 导入历史的时间戳部分来自原会话时间/提醒推算，个别时间可能不精确。
+- React/Ant Design 仍有自身浏览器下限；10 年前设备建议 Lite 模式，但不能保证所有旧浏览器都支持。

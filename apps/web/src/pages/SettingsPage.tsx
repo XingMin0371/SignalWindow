@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Checkbox, Modal, Segmented, Slider, Space, Switch, Typography, message } from "antd";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
@@ -10,6 +10,7 @@ import { safeGet, safeSet } from "../storage";
 import {
   compressBackgroundImage,
   cropBackgroundBlob,
+  drawCropPreview,
   getBackgroundFit,
   getChatAspect,
   getDynamicBackground,
@@ -45,6 +46,7 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
   const [cropZoom, setCropZoom] = useState(1);
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
+  const cropCanvasRef = useRef<HTMLCanvasElement>(null);
   const [importSessions, setImportSessions] = useState<ImportSession[]>([]);
   const [selectedImports, setSelectedImports] = useState<string[]>([]);
   const [importBusy, setImportBusy] = useState(false);
@@ -76,7 +78,17 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
     };
   }, []);
 
-  function tour() {
+  useEffect(() => {
+    if (!cropOpen || !backgroundUrl) return;
+    let alive = true;
+    const canvas = cropCanvasRef.current;
+    if (!canvas) return;
+    void drawCropPreview(canvas, backgroundUrl, cropAspect, cropZoom, cropX, cropY)
+      .catch((error) => { if (alive) message.error(String(error)); });
+    return () => { alive = false; };
+  }, [cropOpen, backgroundUrl, cropAspect, cropZoom, cropX, cropY]);
+
+    function tour() {
     const tourDriver = driver({
       showProgress: true,
       nextBtnText: "下一步",
@@ -339,13 +351,7 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
       >
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <div className="crop-stage" style={{ aspectRatio: String(cropAspect) }}>
-            {backgroundUrl && (
-              <img
-                src={backgroundUrl}
-                alt="裁切预览"
-                style={{ transform: `scale(${cropZoom}) translate(${-cropX * 8}%, ${-cropY * 8}%)` }}
-              />
-            )}
+            <canvas ref={cropCanvasRef} className="crop-canvas" aria-label="裁切预览" />
             <span className="crop-guide" />
           </div>
           <Typography.Text type="secondary">按最近聊天窗口比例 {cropAspect.toFixed(2)} 裁切，保存后生成独立图片。</Typography.Text>
