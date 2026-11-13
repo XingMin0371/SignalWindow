@@ -12,6 +12,7 @@ export const MEDIA_DIR = path.join(DATA_DIR, "media");
 const MAX_MESSAGES = Number(process.env.MAX_MESSAGES || 4000);
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = Number(process.env.MAX_MESSAGE_BYTES || 256 * 1024);
+const MAX_RAW_MESSAGE_BYTES = Number(process.env.MAX_RAW_MESSAGE_BYTES || 12 * 1024 * 1024);
 const MAX_MEDIA_TOTAL_BYTES = Number(process.env.MAX_MEDIA_TOTAL_BYTES || 512 * 1024 * 1024);
 const MAX_MEDIA_FILES = Number(process.env.MAX_MEDIA_FILES || 5000);
 const COMPACT_EVERY_TRIMS = Number(process.env.COMPACT_EVERY_TRIMS || 500);
@@ -274,6 +275,8 @@ class Store {
     this.writeChain = this.writeChain
       .catch(() => {})
       .then(async () => {
+        const rawSize = Buffer.byteLength(JSON.stringify({ profile, conversation, targetId, role, parts, source }), "utf8");
+        if (rawSize > MAX_RAW_MESSAGE_BYTES) throw new Error("message too large");
         const durableParts = await materializeParts(parts);
         const message = {
           id: `${Date.now()}-${++this.seq}`,
@@ -339,7 +342,9 @@ class Store {
     const snapshot = this.messages.map((message) => JSON.stringify(message)).join("\n") + "\n";
     const temporary = `${FILE}.${process.pid}.tmp`;
     await fs.writeFile(temporary, snapshot, { encoding: "utf8", mode: 0o600 });
-    await fs.rename(temporary, FILE);
+    const syncHandle = await fs.open(temporary, "r+");
+    try { await syncHandle.sync(); } finally { await syncHandle.close(); }
+    await renameWithRetry(temporary, FILE);
     await this._openHandle();
   }
 
@@ -355,6 +360,18 @@ class Store {
       this.fileHandle = null;
     }
   }
+}
+
+async function renameWithRetry(from, to) {
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { await fs.rename(from, to); return; } catch (error) {
+      lastError = error;
+      if (!["EPERM", "EACCES", "EBUSY"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 async function exists(file) {

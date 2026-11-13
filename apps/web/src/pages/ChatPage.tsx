@@ -179,6 +179,10 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
             });
           }
         }
+        if (payload.type === "gap") {
+          setSendError("实时连接落后，正在重新同步");
+          window.setTimeout(() => window.location.reload(), 800);
+        }
         if (payload.type === "ack") {
           const pending = pendingRef.current;
           if (!pending || payload.clientId !== pending.clientId) return;
@@ -612,7 +616,7 @@ const MessageRow = memo(function MessageRow({ message }: { message: Message }) {
 const Part = memo(function Part({ part }: { part: MessagePart }) {
   if (part.type === "image" && part.url) return <Image src={part.url} alt={part.alt || "图片"} width={240} loading="lazy" />;
   if (part.type === "file" && part.url) {
-    return <a className="file-part" href={part.url} download={part.name || "文件"} target="_blank" rel="noreferrer"><FileAddOutlined /> {part.name || "文件"}</a>;
+    return <a className="file-part" href={part.url} download={part.name || "文件"} target="_blank" rel="noopener noreferrer"><FileAddOutlined /> {part.name || "文件"}</a>;
   }
   if (part.type === "audio" && part.url) return <audio controls preload="none" src={part.url} />;
   if (part.type === "video" && part.url) return <video controls preload="none" src={part.url} style={{ maxWidth: "100%", borderRadius: 10 }} />;

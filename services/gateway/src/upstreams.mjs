@@ -33,17 +33,19 @@ function validateUpstreamHost(hostname) {
   const host = normalizedHost(hostname);
   const allowedHosts = String(process.env.UPSTREAM_HOST_ALLOWLIST || "")
     .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
-  if (allowedHosts.length) {
-    if (!allowedHosts.includes(host)) throw new Error("OneBot WS 主机不在 UPSTREAM_HOST_ALLOWLIST 中");
-    return;
+  if (allowedHosts.length && !allowedHosts.includes(host)) {
+    throw new Error("OneBot WS 主机不在 UPSTREAM_HOST_ALLOWLIST 中");
   }
+  // An allowlist entry must not turn a literal metadata/private IP into a
+  // permitted destination.
   if (net.isIP(host)) {
     if (privateIp(host) && host !== "127.0.0.1" && host !== "::1") {
-      throw new Error("OneBot WS 不允许连接私有/保留地址；请设置 UPSTREAM_HOST_ALLOWLIST");
+      throw new Error("OneBot WS 不允许连接私有/保留地址");
     }
     return;
   }
   if (host === "localhost" || host === "127.0.0.1" || host === "::1") return;
+  if (allowedHosts.length) return;
   throw new Error("OneBot WS 主机需要加入 UPSTREAM_HOST_ALLOWLIST");
 }
 
@@ -62,6 +64,11 @@ export function normalizeProfile(raw, index = 0) {
   if (!["ws:", "wss:"].includes(parsed.protocol)) throw new Error("OneBot WS 地址必须是 ws:// 或 wss://");
   if (wsUrl.length > 2048 || parsed.username || parsed.password) throw new Error("OneBot WS 地址不合法");
   validateUpstreamHost(parsed.hostname);
+  const gatewayPort = Number(process.env.PORT || 8787);
+  const targetPort = Number(parsed.port || (parsed.protocol === "wss:" ? 443 : 80));
+  if (["127.0.0.1", "::1", "localhost"].includes(normalizedHost(parsed.hostname)) && targetPort === gatewayPort) {
+    throw new Error("OneBot WS 不允许连接网关自身");
+  }
   if (!/^\d{5,12}$/.test(selfId)) throw new Error("Bot QQ / self_id 必须是 5-12 位数字");
   if (!privateUserId || !privateUserIds.every((value) => /^\d{5,12}$/.test(value))) throw new Error("至少一个私聊对象，QQ 必须是 5-12 位数字");
   if (!groupIds.every((value) => /^\d{5,12}$/.test(value))) throw new Error("群号必须是 5-12 位数字");

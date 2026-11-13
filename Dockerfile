@@ -12,8 +12,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile
 COPY services ./services
-COPY apps ./apps
 COPY --from=web /build/apps/web/dist ./apps/web/dist
+RUN mkdir -p /app/data /app/config && chown -R node:node /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=8787

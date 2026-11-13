@@ -19,6 +19,7 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const TOKEN = process.env.GATEWAY_TOKEN || "";
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+const TRUSTED_PROXY_IPS = new Set(String(process.env.TRUSTED_PROXY_IPS || "").split(",").map((value) => value.trim()).filter(Boolean));
 const SESSION_COOKIE = "slw_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
@@ -50,11 +51,19 @@ function broadcast(payload) {
   const data = JSON.stringify(payload);
   for (const ws of clients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    if (ws.bufferedAmount > 1024 * 1024) {
+    if (ws.bufferedAmount > 4 * 1024 * 1024) {
       console.warn("[broadcast] slow client terminated", { buffered: ws.bufferedAmount });
       ws.terminate();
       continue;
     }
+    if (ws.bufferedAmount > 1024 * 1024) {
+      if (!ws.gapSent) {
+        ws.gapSent = true;
+        ws.send(JSON.stringify({ type: "gap" }));
+      }
+      continue;
+    }
+    ws.gapSent = false;
     ws.send(data);
   }
 }
@@ -93,7 +102,8 @@ function startClient(profile) {
 }
 function addProfile(raw) {
   const existing = profileMap.get(String(raw?.id || ""));
-  const input = existing && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
+  const sameEndpoint = existing && String(raw.wsUrl || "") === String(existing.wsUrl || "");
+  const input = existing && sameEndpoint && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
   const profile = normalizeProfile(input, profileMap.size);
   profileMap.set(profile.id, profile);
   profiles = [...profileMap.values()];
@@ -113,8 +123,12 @@ for (const profile of profiles) {
   startClient(profile);
 }
 
+function trustedProxy(req) {
+  return TRUST_PROXY && TRUSTED_PROXY_IPS.has(req.socket.remoteAddress || "");
+}
+
 function clientIp(req) {
-  if (TRUST_PROXY) {
+  if (trustedProxy(req)) {
     const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
     if (forwarded) return forwarded;
   }
@@ -166,7 +180,7 @@ function cookieValue(req, name) {
 function createSession(req, res) {
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, Date.now() + SESSION_TTL_MS);
-  const secure = TRUST_PROXY && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+  const secure = trustedProxy(req) && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
   res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
 }
 function clearSession(req, res) {
@@ -189,7 +203,7 @@ function authorized(req) {
 }
 function originAllowed(req) {
   const origin = String(req.headers.origin || "");
-  if (!origin) return true;
+  if (!origin) return !TOKEN;
   if (ALLOWED_ORIGINS.length) return ALLOWED_ORIGINS.includes(origin);
   try { return new URL(origin).host === String(req.headers.host || ""); } catch { return false; }
 }
@@ -226,7 +240,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  if (String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https") {
+  if (trustedProxy(req) && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
 
@@ -280,10 +294,9 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
-      const incoming = body.profile || body;
-      const existing = profileMap.get(String(incoming?.id || ""));
-      const merged = existing && !incoming.accessToken ? { ...incoming, accessToken: existing.accessToken } : incoming;
-      const profile = normalizeProfile(merged, 0);
+      // A connection test must never reuse an existing profile token for a
+      // caller-supplied URL. Only an explicitly supplied token is used.
+      const profile = normalizeProfile(body.profile || body, 0);
       const result = await new Promise((resolve) => {
         const socket = new WebSocket(profile.wsUrl, {
           headers: {
@@ -294,7 +307,7 @@ const server = http.createServer(async (req, res) => {
         });
         const timer = setTimeout(() => {
           socket.close();
-          resolve({ ok: false, detail: "timeout" });
+          resolve({ ok: false, detail: "unreachable" });
         }, 6000);
         socket.on("open", () => {
           clearTimeout(timer);
@@ -304,7 +317,7 @@ const server = http.createServer(async (req, res) => {
         socket.on("error", (error) => {
           clearTimeout(timer);
           console.error("[profile-test]", error.message);
-          resolve({ ok: false, detail: "connection failed" });
+          resolve({ ok: false, detail: "unreachable" });
         });
       });
       res.writeHead(result.ok ? 200 : 502, { "content-type": "application/json" });
@@ -689,8 +702,12 @@ if (!TOKEN && !loopbackHost) {
   console.error("GATEWAY_TOKEN is required when HOST is not loopback");
   process.exit(1);
 }
-process.on("unhandledRejection", (error) => console.error("unhandled rejection", error));
-process.on("uncaughtException", (error) => console.error("uncaught exception", error));
+function fatal(error) {
+  console.error("fatal runtime error", error);
+  process.exit(1);
+}
+process.on("unhandledRejection", fatal);
+process.on("uncaughtException", fatal);
 
 await store.init();
 server.listen(PORT, HOST, () => {

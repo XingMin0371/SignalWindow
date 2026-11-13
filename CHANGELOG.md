@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.2 - 2026-11-13
+
+### 复审修复
+
+- 修复 `/api/profiles/test` 复用旧 accessToken 并向调用方 wsUrl 发送的凭据外带路径。
+- 上游地址白名单不再绕过字面私有/保留 IP 校验；回环自连网关端口被拒绝。
+- 新增 `TRUSTED_PROXY_IPS`，仅可信代理的 socket 才采信 XFF；HSTS 使用同一判断。
+- 全局 `unhandledRejection`/`uncaughtException` 记录后退出，交给容器重启。
+- 统一上游/前端 URL 过滤；拒绝 `data:text/javascript` 等非白名单 file data URL。
+- WebSocket 鉴权启用时要求 Origin；smoke test 同步使用 Origin。
+- 原始 payload 在物化前检查体积；慢客户端分级 gap/断开；客户端收到 gap 后重新同步。
+- 压缩快照增加 fsync 和 Windows rename 重试；SW 离线回退不再返回 undefined。
+- Dockerfile 预创建并 chown 数据目录，运行镜像只复制前端 dist。
+
+### 仍然保留
+
+- HeightIndex 分页边界 O(n) 重建、消息数组复制。
+- profile 批量保存未事务化。
+- CSP 的 ws/https 兼容范围、Cookie 无 `__Host-`/全端吊销。
+- 没有 CI/SAST/依赖持续扫描。
+
 ## 0.2.1 - 2026-11-13
 
 ### 安全修复

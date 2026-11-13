@@ -27,3 +27,18 @@
 - 未加入 CI、SAST、依赖持续扫描和真实浏览器 FPS/INP 门禁。
 
 以上边界写在文档里，不把“已修复”扩大为“生产级全部达标”。
+
+## v0.2.2 复审补充
+
+- N-01：Dockerfile 预创建 `/app/data`、`/app/config` 并 chown 给 node，运行镜像只复制 dist。
+- N-02：profile test 不再合并旧 accessToken；addProfile 仅在 id 和 wsUrl 都相同时沿用旧令牌。
+- N-03：致命异常记录后进程退出，不再继续服务。
+- N-04：白名单不再跳过字面私有/保留 IP；回环自连网关端口被拒，允许清单主机名仍受 DNS 边界限制。
+- N-05：新增可信代理 IP 列表，XFF/HSTS 仅对可信 socket 生效。
+- N-06：文件 data URL 改为显式允许类型，`data:text/javascript` 被拒；链接补 `noopener`。
+- N-07：原始 payload 在物化前检查体积。
+- N-08：1–4 MB 发送 gap，超过 4 MB 断开；前端 gap 后重新同步。
+- N-09：SW 离线回退返回 504，不再把 undefined 交给 respondWith。
+- N-10：快照 fsync，Windows rename 重试；trim 仍是数组移动。
+- N-11：运行镜像只包含 dist，基础镜像摘要仍未固定。
+- 仍未清零：HeightIndex 分页 O(n)、profile 批量保存、CSP 宽范围、Cookie 全端吊销、CI/SAST。

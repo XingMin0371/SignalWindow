@@ -24,7 +24,7 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     (isHashedAsset
       ? caches.match(event.request).then((cached) => cached || fetch(event.request))
-      : fetch(event.request).catch(() => caches.match(event.request))
+      : fetch(event.request).catch(async () => (await caches.match(event.request)) || new Response("", { status: 504 }))
     ).then((response) => {
       if (response && response.ok && url.origin === location.origin) {
         const copy = response.clone();

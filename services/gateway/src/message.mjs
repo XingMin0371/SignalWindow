@@ -4,13 +4,13 @@ function textPart(text) {
   return { type: "text", text: String(text ?? "") };
 }
 
-function safeUrl(url, kind) {
+export function safeUrl(url, kind) {
   const value = String(url || "").trim();
   if (!value || value.length > 7_000_000) return "";
   if (/^javascript:|^vbscript:|^data:text\/html|^data:image\/svg/i.test(value)) return "";
   if (/^https?:\/\//i.test(value)) return value;
   if (kind === "image" && /^data:image\/(?:png|jpe?g|gif|webp|bmp)[;,]|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
-  if (kind === "file" && /^data:(?:application|audio|video|font)\/(?!svg)|^data:text\/(?!html)|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
+  if (kind === "file" && /^data:(?:application\/(?:pdf|json|zip|octet-stream)|audio\/|video\/|font\/|image\/(?!svg)|text\/(?:plain|csv))|^\/api\/media\/[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(value)) return value;
   if ((kind === "audio" || kind === "video") && /^data:(?:audio|video)\//i.test(value)) return value;
   return "";
 }
@@ -111,13 +111,13 @@ export function sanitizeParts(parts) {
       if (text) out.push(textPart(text));
     } else if (part.type === "image") {
       const url = String(part.url ?? "");
-      if (url.length <= MAX_INLINE_URL && /^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp)[;,])/i.test(url)) {
+      if (url.length <= MAX_INLINE_URL && safeUrl(url, "image")) {
         out.push({ type: "image", url, alt: String(part.alt ?? "图片").slice(0, 100) });
       }
     } else if (part.type === "file") {
       const url = String(part.url ?? "");
       const name = String(part.name ?? "文件").slice(0, 120);
-      if (name && url.length <= 7_000_000 && /^(https?:\/\/|data:(?:application|image|audio|video|font)\/(?!svg)|data:text\/(?!html))/i.test(url)) {
+      if (name && safeUrl(url, "file")) {
         out.push({ type: "file", name, url, mime: String(part.mime ?? "").slice(0, 100), size: Number(part.size) || undefined });
       }
     } else if (part.type === "face") {
