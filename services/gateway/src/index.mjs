@@ -15,6 +15,8 @@ import { store, MEDIA_DIR } from "./store.mjs";
 import { sanitizeParts } from "./message.mjs";
 import { loadProfiles, normalizeProfile, saveProfiles } from "./upstreams.mjs";
 import { importAvailable, importPrivateHistory, listPrivateSessions } from "./astrbot-import.mjs";
+import * as events from "./events.mjs";
+export { on, once, off, emit } from "./events.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
@@ -64,6 +66,7 @@ function publicProfile(profile) {
     groupIds: profile.groupIds,
   };
 }
+const GAP_FRAME = JSON.stringify({ type: "gap" });
 function broadcast(payload) {
   const data = JSON.stringify(payload);
   for (const ws of clients) {
@@ -76,13 +79,24 @@ function broadcast(payload) {
     if (ws.bufferedAmount > 1024 * 1024) {
       if (!ws.gapSent) {
         ws.gapSent = true;
-        ws.send(JSON.stringify({ type: "gap" }));
+        try { ws.send(GAP_FRAME); } catch {}
       }
       continue;
     }
     ws.gapSent = false;
-    ws.send(data);
+    try { ws.send(data); } catch {}
   }
+}
+/**
+ * 发送到单个客户端的安全封装：socket 可能在任何 await 之后关闭，
+ * 直接 ws.send 会同步抛出并升级为未捕获 rejection（曾导致进程退出）。
+ */
+function safeSend(ws, payload) {
+  try {
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+    return true;
+  } catch { return false; }
 }
 function broadcastProfiles() {
   broadcast({
@@ -105,15 +119,19 @@ function startClient(profile) {
         source: "onebot",
       });
       broadcast({ type: "message", message });
+      events.emit("message-added", { message, source: "onebot" });
       return message;
     },
   });
-  client.on("status", (status) => broadcast({
-    type: "status",
-    profile: profile.id,
-    label: profile.label,
-    onebot: status,
-  }));
+  client.on("status", (status) => {
+    broadcast({
+      type: "status",
+      profile: profile.id,
+      label: profile.label,
+      onebot: status,
+    });
+    events.emit("upstream-status", { profile: profile.id, connected: Boolean(status?.connected), detail: status?.detail || "" });
+  });
   onebots.set(profile.id, client);
   client.start();
 }
@@ -159,6 +177,7 @@ async function replaceProfiles(rawProfiles) {
   }
   profiles = [...next];
   broadcastProfiles();
+  events.emit("profiles-updated", { ids: next.map((profile) => profile.id) });
   return profiles;
 }
 
@@ -461,6 +480,12 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || body.token || "";
       if (TOKEN && !authorized(req) && !safeEqual(supplied, TOKEN)) {
+        if (rateLimited(req)) {
+          res.writeHead(429, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "too many attempts" }));
+          return;
+        }
+        noteAuthFailure(req);
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
@@ -751,7 +776,7 @@ function sendHistory(ws, profile, conversation, targetId, beforeId = "", limit =
   if (!target) return;
   const pageLimit = Math.max(1, Math.min(100, Number(limit) || 40));
   const messages = store.list(profile, conversation, target, targetsFor(current, conversation)[0], pageLimit, String(beforeId || ""));
-  ws.send(JSON.stringify({
+  safeSend(ws, {
     type: "history",
     profile,
     conversation,
@@ -760,8 +785,84 @@ function sendHistory(ws, profile, conversation, targetId, beforeId = "", limit =
     hasMore: messages.length >= pageLimit,
     requestId,
     messages,
-  }));
+  });
 }
+
+/**
+ * WS 消息类型注册表：扩展者可调用 registerWsHandler("mytype", fn) 添加新消息类型，
+ * 无需修改 index.mjs 主文件。处理器抛错只回传 error 帧，绝不升级为进程级 rejection。
+ */
+export const wsHandlers = new Map();
+export function registerWsHandler(type, handler) {
+  if (typeof type !== "string" || typeof handler !== "function") return;
+  wsHandlers.set(type, handler);
+}
+
+registerWsHandler("history", (ws, payload) => {
+  const profile = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
+  if (profile) sendHistory(
+    ws,
+    profile,
+    payload.conversation === "group" ? "group" : "private",
+    payload.targetId,
+    payload.beforeId,
+    payload.limit,
+    payload.requestId,
+  );
+});
+
+registerWsHandler("send", async (ws, payload) => {
+  const clientId = String(payload.clientId || "");
+  if (clientId && !/^[A-Za-z0-9_-]{1,128}$/.test(clientId)) {
+    safeSend(ws, { type: "error", clientId: "", detail: "invalid clientId" });
+    return;
+  }
+  if (clientId && recentSendIds.has(clientId)) {
+    safeSend(ws, { type: "ack", clientId });
+    return;
+  }
+  const profileId = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
+  if (!profileId) {
+    safeSend(ws, { type: "error", clientId, detail: "尚未配置 AstrBot" });
+    return;
+  }
+  const parts = sanitizeParts(
+    Array.isArray(payload.parts)
+      ? payload.parts
+      : [{ type: "text", text: String(payload.text ?? "") }],
+  );
+  if (!parts.length) {
+    safeSend(ws, { type: "error", clientId, profile: profileId, detail: "empty message" });
+    return;
+  }
+  const conversation = payload.conversation === "group" ? "group" : "private";
+  const current = profileMap.get(profileId);
+  const targetId = resolveTarget(current, conversation, payload.targetId);
+  if (!targetId) {
+    safeSend(ws, { type: "error", clientId, profile: profileId, detail: "会话对象未配置" });
+    return;
+  }
+  // 幂等键必须在任何 await 之前占用，否则同一 clientId 的并发帧会重复落盘。
+  if (clientId) recentSendIds.set(clientId, Date.now());
+  let message;
+  try {
+    message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
+  } catch (error) {
+    if (clientId) recentSendIds.delete(clientId);
+    safeSend(ws, { type: "error", clientId, profile: profileId, detail: error.message });
+    return;
+  }
+  broadcast({ type: "message", message });
+  events.emit("message-added", { message, source: "web" });
+  try {
+    await onebots.get(profileId).send({ conversation, targetId, parts });
+  } catch (error) {
+    if (clientId) recentSendIds.delete(clientId);
+    safeSend(ws, { type: "error", clientId, profile: profileId, detail: error.message });
+    return;
+  }
+  safeSend(ws, { type: "ack", clientId });
+});
 const wsHeartbeat = setInterval(() => {
   for (const ws of clients) {
     if (ws.isAlive === false) { ws.terminate(); continue; }
@@ -799,8 +900,12 @@ server.on("upgrade", (req, socket, head) => {
     ws.isAlive = true;
     ws.messageWindow = [];
     ws.on("pong", () => { ws.isAlive = true; });
-    ws.on("close", () => clients.delete(ws));
+    ws.on("close", () => {
+      clients.delete(ws);
+      events.emit("client-close", { count: clients.size, remoteIp: ip });
+    });
     ws.on("error", () => clients.delete(ws));
+    events.emit("client-open", { count: clients.size, remoteIp: ip });
     ws.on("message", async (raw) => {
       const now = Date.now();
       ws.messageWindow = ws.messageWindow.filter((time) => now - time < 10_000);
@@ -812,75 +917,20 @@ server.on("upgrade", (req, socket, head) => {
       let payload;
       try { payload = JSON.parse(raw.toString()); } catch { return; }
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-      if (payload.type === "history") {
-        const profile = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
-        if (profile) sendHistory(
-          ws,
-          profile,
-          payload.conversation === "group" ? "group" : "private",
-          payload.targetId,
-          payload.beforeId,
-          payload.limit,
-          payload.requestId,
-        );
-        return;
-      }
-      if (payload.type !== "send") return;
-      const clientId = String(payload.clientId || "");
-      if (clientId && !/^[A-Za-z0-9_-]{1,128}$/.test(clientId)) {
-        ws.send(JSON.stringify({ type: "error", clientId: "", detail: "invalid clientId" }));
-        return;
-      }
-      if (clientId && recentSendIds.has(clientId)) {
-        ws.send(JSON.stringify({ type: "ack", clientId }));
-        return;
-      }
-      const profileId = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
-      if (!profileId) {
-        ws.send(JSON.stringify({ type: "error", clientId, detail: "尚未配置 AstrBot" }));
-        return;
-      }
-      const parts = sanitizeParts(
-        Array.isArray(payload.parts)
-          ? payload.parts
-          : [{ type: "text", text: String(payload.text ?? "") }],
-      );
-      if (!parts.length) {
-        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: "empty message" }));
-        return;
-      }
-      const conversation = payload.conversation === "group" ? "group" : "private";
-      const current = profileMap.get(profileId);
-      const targetId = resolveTarget(current, conversation, payload.targetId);
-      if (!targetId) {
-        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: "会话对象未配置" }));
-        return;
-      }
-      // 幂等键必须在任何 await 之前占用，否则同一 clientId 的并发帧会重复落盘。
-      if (clientId) recentSendIds.set(clientId, Date.now());
-      let message;
+      const handler = wsHandlers.get(payload.type);
+      if (!handler) return;
       try {
-        message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
+        await handler(ws, payload);
       } catch (error) {
-        if (clientId) recentSendIds.delete(clientId);
-        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
-        return;
+        console.error(`[ws:${payload.type}]`, error);
+        safeSend(ws, { type: "error", clientId: String(payload.clientId || ""), detail: "internal error" });
       }
-      broadcast({ type: "message", message });
-      try {
-        await onebots.get(profileId).send({ conversation, targetId, parts });
-      } catch (error) {
-        if (clientId) recentSendIds.delete(clientId);
-        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
-        return;
-      }
-      ws.send(JSON.stringify({ type: "ack", clientId }));
     });
-    ws.send(JSON.stringify({
+    safeSend(ws, {
       type: "hello",
       profiles: [...profileMap.values()].map(publicProfile),
       onebots: Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])),
-    }));
+    });
     // History is loaded lazily by the browser for the selected conversation only.
   });
 });

@@ -50,13 +50,13 @@ export class OneBotClient extends EventEmitter {
       this.handleAction(payload)
         .then((response) => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ ...response, echo: payload.echo }));
+            try { ws.send(JSON.stringify({ ...response, echo: payload.echo })); } catch (error) { console.error("[onebot-reply]", error.message); }
           }
         })
         .catch((error) => {
           console.error("[onebot-action]", error.message);
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ status: "failed", retcode: 1500, echo: payload.echo }));
+            try { ws.send(JSON.stringify({ status: "failed", retcode: 1500, echo: payload.echo })); } catch (sendError) { console.error("[onebot-reply]", sendError.message); }
           }
         });
     });

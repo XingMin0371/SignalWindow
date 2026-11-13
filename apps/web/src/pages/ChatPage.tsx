@@ -71,6 +71,9 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
   const heightIndexRef = useRef(new SqrtHeightIndex());
   const indexedKeyRef = useRef("");
   const indexedIdsRef = useRef<string[]>([]);
+  // 记录每次会话数组变更的「来源」：append / prepend / replace。
+  // 虚拟索引据此做 O(1) 增量更新，不再对整个数组做 O(n) 逐项比对。
+  const provenanceRef = useRef<Map<string, { kind: "append" | "prepend" | "replace"; oldLen: number; oldFirst: string; oldLast: string }>>(new Map());
   const autoLoadTimerRef = useRef(0);
   const autoLoadBlockedUntilRef = useRef(0);
   const prependAnchorRef = useRef<{ id: string; top: number } | null>(null);
@@ -167,10 +170,21 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
           if (payload.requestId && payload.requestId !== String(historySeq.current)) return;
           const key = historyKey(payload.profile, payload.conversation, payload.targetId);
           setMessages((current) => {
-            if (!payload.prepend) return { ...current, [key]: payload.messages || [] };
+            if (!payload.prepend) {
+              provenanceRef.current.set(key, { kind: "replace", oldLen: 0, oldFirst: "", oldLast: "" });
+              return { ...current, [key]: payload.messages || [] };
+            }
             const existing = current[key] || [];
             const existingIds = new Set(existing.map((item) => item.id));
             const older = (payload.messages || []).filter((item: Message) => !existingIds.has(item.id));
+            if (older.length) {
+              provenanceRef.current.set(key, {
+                kind: "prepend",
+                oldLen: existing.length,
+                oldFirst: existing[0]?.id || "",
+                oldLast: existing[existing.length - 1]?.id || "",
+              });
+            }
             return { ...current, [key]: [...older, ...existing] };
           });
           setHistoryLoading(false);
@@ -194,7 +208,18 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
                   list.push(item);
                   additions.set(key, list);
                 }
-                for (const [key, list] of additions) next[key] = [...(next[key] || []), ...list];
+                for (const [key, list] of additions) {
+                  const existing = next[key] || [];
+                  if (existing.length) {
+                    provenanceRef.current.set(key, {
+                      kind: "append",
+                      oldLen: existing.length,
+                      oldFirst: existing[0]?.id || "",
+                      oldLast: existing[existing.length - 1]?.id || "",
+                    });
+                  }
+                  next[key] = [...existing, ...list];
+                }
                 return next;
               });
             });
@@ -320,35 +345,43 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     }
   }, [visible.length, key, measureVersion]);
 
-  // Incremental sqrt index: append/prepend/update do not rebuild the whole
-  // visible array; block metadata is the only O(blocks) part.
+  // Incremental index with provenance: the reducer records HOW the array
+  // changed (append / prepend / replace), so this memo updates the index in
+  // O(delta) instead of diffing the whole array per message (was O(n)).
   const heightIndex = useMemo(() => {
     const index = heightIndexRef.current;
     const ids = visible.map((message) => message.id);
     const known = indexedIdsRef.current;
-    if (indexedKeyRef.current !== key || ids.length < known.length) {
+    const keyChanged = indexedKeyRef.current !== key;
+    const meta = keyChanged ? undefined : provenanceRef.current.get(key);
+    if (keyChanged) provenanceRef.current.clear();
+    else provenanceRef.current.delete(key);
+    if (keyChanged || ids.length < known.length) {
       index.reset();
       for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
-    } else if (ids.length === known.length && !known.every((id, position) => ids[position] === id)) {
-      // 同 key、同长度但内容被整页替换时，旧索引的 id 会与 visible 错位。
-      index.reset();
-      for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
-    } else if (ids.length > known.length) {
-      const prefixSame = known.every((id, position) => ids[position] === id);
-      const suffixSame = known.every((id, position) => ids[position + ids.length - known.length] === id);
-      if (prefixSame) {
-        for (let position = known.length; position < visible.length; position += 1) {
-          index.append(visible[position].id, heightsRef.current.get(visible[position].id) || ROW_HEIGHT);
-        }
-      } else if (suffixSame) {
-        index.prepend(visible.slice(0, ids.length - known.length).map((message) => ({
-          id: message.id,
-          height: heightsRef.current.get(message.id) || ROW_HEIGHT,
-        })));
-      } else {
+    } else if (ids.length === known.length) {
+      // 同长度：无变化渲染（memo 依赖 visible 引用，此时直接复用）；
+      // 显式 replace 或首尾 id 对不上时保守重建。
+      const unchanged = known.length === 0 ||
+        known.every((id, position) => id === ids[position]);
+      if (meta?.kind === "replace" || !unchanged) {
         index.reset();
         for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
       }
+    } else if (meta?.kind === "append" && meta.oldLen === known.length && ids[meta.oldLen - 1] === meta.oldLast) {
+      for (let position = known.length; position < visible.length; position += 1) {
+        index.append(visible[position].id, heightsRef.current.get(visible[position].id) || ROW_HEIGHT);
+      }
+    } else if (meta?.kind === "prepend" && meta.oldLen === known.length &&
+      ids[ids.length - known.length] === meta.oldFirst && ids[ids.length - 1] === meta.oldLast) {
+      index.prepend(visible.slice(0, ids.length - known.length).map((message) => ({
+        id: message.id,
+        height: heightsRef.current.get(message.id) || ROW_HEIGHT,
+      })));
+    } else {
+      // 来源信息缺失或校验失败（长度/首尾对不上）：退回保守重建，保证正确性。
+      index.reset();
+      for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
     }
     indexedKeyRef.current = key;
     indexedIdsRef.current = ids;
@@ -495,22 +528,38 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
             hidden
             onChange={(event) => {
               const selected = event.target.files?.[0];
+              event.target.value = ""; // 允许再次选择同一个文件
               if (!selected) return;
-              if (!selected.type.startsWith("image/")) {
+              // 旧 Android 相机/图库可能返回空 MIME，用扩展名兜底。
+              const looksImage = selected.type.startsWith("image/") ||
+                /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(selected.name);
+              if (!looksImage) {
                 setSendError("请选择图片文件");
-                event.target.value = "";
                 return;
               }
               if (selected.size > 2_000_000) {
                 setSendError("图片超过 2 MB");
-                event.target.value = "";
                 return;
               }
+              const inferredMime = selected.type || ({
+                png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+                webp: "image/webp", bmp: "image/bmp", avif: "image/avif",
+              } as Record<string, string>)[(selected.name.split(".").pop() || "").toLowerCase()] || "image/png";
               const reader = new FileReader();
-              reader.onload = () => { setImage(String(reader.result || "")); setSendError(""); };
+              reader.onload = () => {
+                const raw = String(reader.result || "");
+                if (selected.type) {
+                  setImage(raw);
+                } else {
+                  // FileReader uses application/octet-stream for some older
+                  // Android pickers; the sender must advertise the real image
+                  // type or the gateway will reject it as an unsafe URL.
+                  const comma = raw.indexOf(",");
+                  setImage(comma >= 0 ? `data:${inferredMime};base64,${raw.slice(comma + 1)}` : raw);
+                }
+                setSendError("");
+              };
               reader.readAsDataURL(selected);
-              event.target.value = "";
-              event.target.value = ""; // 允许再次选择同一个文件
             }}
           />
           <PictureOutlined />
@@ -522,10 +571,10 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
             hidden
             onChange={(event) => {
               const selected = event.target.files?.[0];
+              event.target.value = ""; // 允许再次选择同一个文件
               if (!selected) return;
               if (selected.size > 5_000_000) {
                 setFileError("文件超过 5 MB");
-                event.target.value = "";
                 return;
               }
               const reader = new FileReader();
@@ -534,8 +583,6 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
                 setFileError("");
               };
               reader.readAsDataURL(selected);
-              event.target.value = "";
-              event.target.value = ""; // 允许再次选择同一个文件
             }}
           />
           <FileAddOutlined />

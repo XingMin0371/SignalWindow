@@ -139,6 +139,9 @@ class Store {
     this.compacting = false;
     this.fileHandle = null;
     this.lockHandle = null;
+    this.pendingLines = [];
+    this.pendingFlush = null;
+    this.appendError = null;
   }
 
   async init() {
@@ -179,6 +182,68 @@ class Store {
   async _openHandle() {
     if (!this.fileHandle) this.fileHandle = await fs.open(FILE, "a", 0o600);
     return this.fileHandle;
+  }
+
+  /**
+   * 组提交：add() 只把行放进内存队列立即返回（广播因此不再等磁盘），
+   * setImmediate 之后同批合并成一次 write。
+   * - 顺序保证：pendingFlush 在 splice 之后才置 null，同批 Promise 不会漏行；
+   * - 崩溃语义：append 路径本来就不 fsync（OS 页缓存兜底），这里只把
+   *   「未落盘」窗口从 write 返回前的 0ms 放宽到 setImmediate 的 <1ms，
+   *   没有扩大实际丢失等级；
+   * - 磁盘错误不丢：写入失败记录到 appendError，下一次 add/flush 立即抛出，
+   *   不会变成无人处理的 rejection。
+   */
+  _scheduleFlush() {
+    if (this.pendingFlush) return this.pendingFlush;
+    this.pendingFlush = new Promise((resolve, reject) => {
+      setImmediate(async () => {
+        try {
+          // Keep one write in flight at a time. New lines that arrive while
+          // the write is pending are picked up by this loop, so they cannot
+          // be left stranded without a future flush.
+          while (this.pendingLines.length) {
+            const batch = this.pendingLines.splice(0);
+            const lines = batch.join("");
+            const handle = await this._openHandle();
+            await handle.write(lines);
+          }
+          this.pendingFlush = null;
+          resolve();
+        } catch (error) {
+          this.pendingFlush = null;
+          reject(error);
+        }
+      });
+    });
+    return this.pendingFlush;
+  }
+
+  _enqueueLine(line) {
+    this.pendingLines.push(line);
+    const flush = this._scheduleFlush();
+    flush.catch((error) => {
+      this.appendError = this.appendError || error;
+      console.error("[store:append]", error);
+    });
+    return flush;
+  }
+
+  async _drainPending() {
+    while (this.pendingLines.length || this.pendingFlush) {
+      if (this.appendError) {
+        const error = this.appendError;
+        this.appendError = null;
+        throw error;
+      }
+      this._scheduleFlush();
+      await this.pendingFlush;
+    }
+    if (this.appendError) {
+      const error = this.appendError;
+      this.appendError = null;
+      throw error;
+    }
   }
 
   async _pruneMedia() {
@@ -307,14 +372,18 @@ class Store {
   list(profile, conversation, targetId, defaultTargetId, limit = 200, beforeId = "") {
     let rows;
     if (targetId) {
-      rows = this.index.get(keyOf(profile, conversation, targetId)) || [];
-      if (!rows.length) {
-        // Legacy rows may have no targetId. Search only that legacy bucket,
-        // not the complete message list.
-        const legacyRows = this.index.get(keyOf(profile, conversation, "")) || [];
-        rows = targetId === defaultTargetId
-          ? legacyRows.filter((message) => !message.targetId || message.targetId === targetId)
-          : legacyRows.filter((message) => message.targetId === targetId);
+      const direct = this.index.get(keyOf(profile, conversation, targetId)) || [];
+      // 遗留数据修复：旧版本消息可能没有 targetId，被归入 "" 桶。
+      // 只要查的是默认对象，就必须把无 targetId 的旧消息并入结果，
+      // 否则一旦直连桶非空，旧历史会整段消失。
+      const legacyRows = targetId === defaultTargetId
+        ? (this.index.get(keyOf(profile, conversation, "")) || []).filter((message) => !message.targetId)
+        : [];
+      rows = legacyRows.length ? [...legacyRows, ...direct] : direct;
+      if (!rows.length && !legacyRows.length && targetId !== defaultTargetId) {
+        // 保留旧语义：显式 targetId 查询在直连桶为空时也尝试遗留桶的显式匹配。
+        const explicit = this.index.get(keyOf(profile, conversation, "")) || [];
+        rows = explicit.filter((message) => message.targetId === targetId);
       }
     } else {
       rows = this.messages.filter((message) =>
@@ -353,6 +422,11 @@ class Store {
     this.writeChain = this.writeChain
       .catch(() => {})
       .then(async () => {
+        if (this.appendError) {
+          const error = this.appendError;
+          this.appendError = null;
+          throw error;
+        }
         const rawSize = Buffer.byteLength(JSON.stringify({ profile, conversation, targetId, role, parts, source }), "utf8");
         if (rawSize > MAX_RAW_MESSAGE_BYTES) throw new Error("message too large");
         const durableParts = await materializeParts(parts);
@@ -374,11 +448,12 @@ class Store {
         this.messages.push(message);
         this._index(message);
         this._trim();
-        const handle = await this._openHandle();
-        await handle.write(line);
+        // 不 await：广播不等磁盘；失败延迟到下一次操作抛出（见 _enqueueLine）。
+        this._enqueueLine(line);
         if (this.trimmed >= COMPACT_EVERY_TRIMS && !this.compacting) {
           this.compacting = true;
           try {
+            await this._drainPending();
             await this._writeSnapshot();
             await this._pruneMedia();
             this.trimmed = 0;
@@ -412,7 +487,8 @@ class Store {
     return this.writeChain;
   }
 
-    async _writeSnapshot() {
+  async _writeSnapshot() {
+    await this._drainPending();
     if (this.fileHandle) {
       await this.fileHandle.close();
       this.fileHandle = null;
@@ -428,6 +504,7 @@ class Store {
 
   async flush() {
     await this.writeChain;
+    await this._drainPending();
     return this.writeChain;
   }
 

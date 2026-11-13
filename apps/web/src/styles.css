@@ -111,25 +111,41 @@ body::before {
   border-radius: inherit;
   background: linear-gradient(135deg, rgba(13,18,20,.82), rgba(8,10,12,.74));
 }
+/* ── 玻璃质感：静态材质层（零每帧成本）──────────────────────────────
+ * 取舍：真 backdrop-filter:blur() 要求合成器把滚动区域每帧重新采样，
+ * 在 2016 年的移动 GPU 上是 5-15ms/帧、且滚动期间持续发生。
+ * 这里改用「磨砂材质三板斧」，全部只发生一次绘制、合成器缓存：
+ *   1) 颗粒（feTurbulence 噪点贴图，首次栅格化后平铺，<1KB）
+ *   2) 厚度感（1px 顶部高光 + 底部暗边 = bevel 倒角）
+ *   3) 镜面（斜向高光渐变 + 外层环境阴影两层深度）
+ * 不支持的旧浏览器（Android 4.x WebView 无法栅格化 SVG 背景）
+ * 自动退回纯渐变玻璃——功能无损，仅少一层颗粒。
+ */
+:root {
+  --glass-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='96' height='96' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E");
+}
 html.theme-glass .chat-page::after {
   background:
-    linear-gradient(135deg, rgba(50,65,75,.54), rgba(11,17,23,.42)),
+    var(--glass-grain),
     linear-gradient(112deg, rgba(196,221,235,.12), transparent 34%),
-    radial-gradient(90% 80% at 0% 0%, rgba(122,167,198,.12), transparent 65%);
+    radial-gradient(90% 80% at 0% 0%, rgba(122,167,198,.12), transparent 65%),
+    linear-gradient(135deg, rgba(50,65,75,.54), rgba(11,17,23,.42));
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.13),
-    inset 0 -1px 0 rgba(0,0,0,.26),
-    inset 0 0 48px rgba(112,177,218,.035);
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 -1px 0 rgba(0,0,0,.28),
+    inset 0 0 48px rgba(112,177,218,.045);
 }
 html.theme-transparent .chat-page::after {
   background:
+    var(--glass-grain),
     linear-gradient(112deg, rgba(255,255,255,.055) 0%, rgba(255,255,255,.012) 14%, transparent 31%),
     rgba(8,10,12,.032);
   box-shadow:
-    inset 0 0 0 1px rgba(255,255,255,.055),
-    inset 0 1px 0 rgba(255,255,255,.18),
-    inset 0 -1px 0 rgba(0,0,0,.16);
+    inset 0 0 0 1px rgba(255,255,255,.06),
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 -1px 0 rgba(0,0,0,.18);
 }
+html.lite .chat-page::after { background-image: none !important; }
 
 /* Static time-tinted sun rays. One pseudo-element; no blur, filter or animation. */
 .chat-page::before {
@@ -239,6 +255,12 @@ html.lite .chat-page, html.lite .auth-card, html.lite .setup-modal .ant-modal-co
   backdrop-filter: none !important;
   box-shadow: none !important;
 }
+html.lite .chat-page::after { background: none !important; }
+/* lite 下磨砂颗粒与渐变全部退掉，换实色，保证最弱设备上的可读性。 */
+html.lite.theme-glass .chat-bubble,
+html.lite.theme-glass .chat-row.user .chat-bubble { background: #22323d !important; }
+html.lite.theme-transparent .chat-bubble,
+html.lite.theme-transparent .chat-row.user .chat-bubble { background: #1b272b !important; }
 html.lite.theme-default .chat-page { background: #0d1214; }
 html.lite .chat-row { animation: none !important; }
 html.lite .picture-button:hover { color: var(--muted); border-color: var(--line); }
@@ -289,11 +311,12 @@ html.theme-glass .chat-page {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 30px 80px rgba(0,0,0,.32);
 }
 html.theme-transparent .chat-page {
-  /* Clear window: no dark panel wash; only a barely visible glass tint. */
+  /* Clear window: no dark panel wash; only a barely visible glass tint.
+     A whisper of contact shadow keeps the pane from floating into the sky. */
   background: transparent;
   backdrop-filter: none;
   border-color: rgba(255,255,255,.24);
-  box-shadow: none;
+  box-shadow: 0 24px 70px rgba(0,0,0,.26);
 }
 html.theme-glass .chat-background::after {
   background: linear-gradient(180deg, rgba(8,10,12,.16), rgba(8,10,12,.38));
@@ -327,10 +350,14 @@ html.theme-transparent .chat-composer {
 }
 html.theme-glass .chat-bubble {
   background:
+    var(--glass-grain),
     linear-gradient(112deg, rgba(170,216,240,.10) 0%, transparent 30%),
     linear-gradient(135deg, rgba(47,61,72,.72), rgba(13,21,27,.60));
   border-color: rgba(170,211,235,.24);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.10);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.04),
+    0 6px 18px rgba(0,0,0,.22);
   color: var(--text);
   text-shadow: 0 1px 2px rgba(0,0,0,.45);
 }
@@ -338,10 +365,14 @@ html.theme-glass .file-part { color: var(--cyan); }
 html.theme-glass .chat-time { color: #b9d2df !important; text-shadow: 0 1px 2px rgba(0,0,0,.55); }
 html.theme-transparent .chat-bubble {
   background:
+    var(--glass-grain),
     linear-gradient(112deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,.022) 18%, transparent 35%),
     linear-gradient(135deg, rgba(27,39,43,.78), rgba(7,12,14,.68));
   border-color: rgba(255,255,255,.22);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.045),
+    0 6px 18px rgba(0,0,0,.24);
   text-shadow: 0 1px 2px rgba(0,0,0,.55);
 }
 html.theme-glass .chat-row.user .chat-bubble,
@@ -352,17 +383,27 @@ html.theme-transparent .chat-row.user .chat-bubble {
 }
 html.theme-glass .chat-row.user .chat-bubble {
   background:
+    var(--glass-grain),
     linear-gradient(112deg, rgba(170,216,240,.10) 0%, transparent 30%),
     linear-gradient(135deg, rgba(44,65,80,.78), rgba(12,23,31,.68));
   border-color: rgba(170,211,235,.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.04),
+    0 6px 18px rgba(0,0,0,.22);
   color: var(--text);
   text-shadow: 0 1px 2px rgba(0,0,0,.45);
 }
 html.theme-transparent .chat-row.user .chat-bubble {
   background:
+    var(--glass-grain),
     linear-gradient(112deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,.022) 18%, transparent 35%),
     linear-gradient(135deg, rgba(27,39,43,.78), rgba(7,12,14,.68));
   border-color: rgba(255,255,255,.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.14),
+    inset 0 0 0 1px rgba(255,255,255,.045),
+    0 6px 18px rgba(0,0,0,.24);
 }
 html.theme-transparent .chat-time { color: #dce8e6 !important; text-shadow: 0 1px 3px rgba(0,0,0,.9); }
 html.theme-transparent .ant-empty-description { color: #dce8e6 !important; text-shadow: 0 1px 3px rgba(0,0,0,.9); }

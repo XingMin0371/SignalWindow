@@ -134,6 +134,7 @@ export function sanitizeParts(parts) {
     } else if (part.type === "face") {
       out.push({ type: "face", name: String(part.name ?? "表情").slice(0, 50) });
     }
+    if (out.length >= 20) break;
   }
   return out;
 }
