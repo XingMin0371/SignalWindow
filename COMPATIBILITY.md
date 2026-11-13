@@ -27,6 +27,7 @@ Lite mode, static backgrounds, and the latest available browser.
 ## Feature fallbacks
 
 ```text
+Old browser / no CSS variables -> /lite.html before full React bundle
 ResizeObserver unavailable -> fixed-height virtual rows
 IndexedDB unavailable      -> background feature disabled, chat still works
 WebP canvas unavailable    -> original image fallback

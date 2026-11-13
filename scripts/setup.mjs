@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline/promises";
 import crypto from "node:crypto";
+import { REPO_ROOT } from "../services/gateway/src/env.mjs";
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const NON_INTERACTIVE = process.argv.includes("--yes") || process.env.NON_INTERACTIVE === "1" || !process.stdin.isTTY;
@@ -72,19 +73,22 @@ const profiles = {
   }],
 };
 
-await fs.mkdir("config", { recursive: true });
-if (await fs.access(".env").then(() => true).catch(() => false)) {
-  await fs.copyFile(".env", ".env.bak");
-  await fs.chmod(".env.bak", 0o600).catch(() => {});
+const envPath = path.join(REPO_ROOT, ".env");
+const configDir = path.join(REPO_ROOT, "config");
+const profilePath = path.join(configDir, "upstreams.json");
+await fs.mkdir(configDir, { recursive: true });
+if (await fs.access(envPath).then(() => true).catch(() => false)) {
+  await fs.copyFile(envPath, envPath + ".bak");
+  await fs.chmod(envPath + ".bak", 0o600).catch(() => {});
 }
-if (await fs.access("config/upstreams.json").then(() => true).catch(() => false)) {
-  await fs.copyFile("config/upstreams.json", "config/upstreams.json.bak");
-  await fs.chmod("config/upstreams.json.bak", 0o600).catch(() => {});
+if (await fs.access(profilePath).then(() => true).catch(() => false)) {
+  await fs.copyFile(profilePath, profilePath + ".bak");
+  await fs.chmod(profilePath + ".bak", 0o600).catch(() => {});
 }
-await fs.writeFile(".env", env, { encoding: "utf8", mode: 0o600 });
-await fs.writeFile("config/upstreams.json", JSON.stringify(profiles, null, 2), { encoding: "utf8", mode: 0o600 });
-await fs.chmod(".env", 0o600).catch(() => {});
-await fs.chmod("config/upstreams.json", 0o600).catch(() => {});
+await fs.writeFile(envPath, env, { encoding: "utf8", mode: 0o600 });
+await fs.writeFile(profilePath, JSON.stringify(profiles, null, 2), { encoding: "utf8", mode: 0o600 });
+await fs.chmod(envPath, 0o600).catch(() => {});
+await fs.chmod(profilePath, 0o600).catch(() => {});
 rl.close();
 console.log("\n已写入 .env 和 config/upstreams.json");
 console.log(`启动：pnpm install && pnpm start`);

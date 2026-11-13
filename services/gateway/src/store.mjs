@@ -27,6 +27,7 @@ const MAX_RAW_MESSAGE_BYTES = envInt("MAX_RAW_MESSAGE_BYTES", 12 * 1024 * 1024, 
 const MAX_MEDIA_TOTAL_BYTES = envInt("MAX_MEDIA_TOTAL_BYTES", 512 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER);
 const MAX_MEDIA_FILES = envInt("MAX_MEDIA_FILES", 5000, 1, 10_000_000);
 const COMPACT_EVERY_TRIMS = envInt("COMPACT_EVERY_TRIMS", 500, 1, 10_000_000);
+const MAX_PENDING_LINES = envInt("MAX_PENDING_LINES", 4096, 64, 1_000_000);
 const LOCK_STALE_MS = 5 * 60 * 1000;
 const LOCK_FILE = path.join(DATA_DIR, "gateway.lock");
 
@@ -454,6 +455,9 @@ class Store {
         this.messages.push(message);
         this._index(message);
         this._trim();
+        // If the disk is much slower than incoming traffic, apply backpressure
+        // instead of allowing the in-memory write queue to grow without bound.
+        if (this.pendingLines.length >= MAX_PENDING_LINES) await this._drainPending();
         // 不 await：广播不等磁盘；失败延迟到下一次操作抛出（见 _enqueueLine）。
         this._enqueueLine(line);
         if (this.trimmed >= COMPACT_EVERY_TRIMS && !this.compacting) {
