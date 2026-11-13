@@ -21,6 +21,7 @@ const TOKEN = process.env.GATEWAY_TOKEN || "";
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const TRUSTED_PROXY_IPS = new Set(String(process.env.TRUSTED_PROXY_IPS || "").split(",").map((value) => value.trim()).filter(Boolean));
 const SESSION_COOKIE = "slw_session";
+const SESSION_COOKIE_SECURE = "__Host-slw_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean);
@@ -228,21 +229,29 @@ function cookieValue(req, name) {
   }
   return "";
 }
+function secureRequest(req) {
+  return trustedProxy(req) && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+}
+function sessionCookieName(secure) {
+  return secure ? SESSION_COOKIE_SECURE : SESSION_COOKIE;
+}
 function createSession(req, res) {
-  const previous = cookieValue(req, SESSION_COOKIE);
+  const secure = secureRequest(req);
+  const name = sessionCookieName(secure);
+  const previous = cookieValue(req, name) || cookieValue(req, SESSION_COOKIE);
   if (previous) sessions.delete(previous);
   const id = crypto.randomBytes(32).toString("base64url");
   sessions.set(id, Date.now() + SESSION_TTL_MS);
-  const secure = trustedProxy(req) && String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
-  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
+  res.setHeader("Set-Cookie", `${name}=${id}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure ? "; Secure" : ""}`);
 }
 function clearSession(req, res) {
-  const id = cookieValue(req, SESSION_COOKIE);
+  const id = cookieValue(req, SESSION_COOKIE_SECURE) || cookieValue(req, SESSION_COOKIE);
   if (id) sessions.delete(id);
-  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`);
+  const expired = "Path=/; SameSite=Strict; Max-Age=0; HttpOnly";
+  res.setHeader("Set-Cookie", [`${SESSION_COOKIE}=; ${expired}`, `${SESSION_COOKIE_SECURE}=; ${expired}; Secure`]);
 }
 function sessionValid(req) {
-  const id = cookieValue(req, SESSION_COOKIE);
+  const id = cookieValue(req, SESSION_COOKIE_SECURE) || cookieValue(req, SESSION_COOKIE);
   if (!id) return false;
   const expires = sessions.get(id);
   if (!expires || expires < Date.now()) { sessions.delete(id); return false; }
@@ -378,6 +387,9 @@ const server = http.createServer(async (req, res) => {
           resolve({ ok: false, detail: "unreachable" });
         });
       });
+      // Reduce the open/closed-port timing oracle without making the UI feel
+      // slow; both outcomes wait at least the same short floor.
+      await new Promise((resolve) => setTimeout(resolve, 350));
       res.writeHead(result.ok ? 200 : 502, { "content-type": "application/json" });
       res.end(JSON.stringify(result));
     } catch (error) {
@@ -553,12 +565,32 @@ const server = http.createServer(async (req, res) => {
         ogg: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
         pdf: "application/pdf", txt: "text/plain; charset=utf-8", json: "application/json; charset=utf-8",
       };
-      res.writeHead(200, {
+      let start = 0;
+      let end = stat.size - 1;
+      let status = 200;
+      const range = String(req.headers.range || "");
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (match) {
+        if (match[1] === "" && match[2] !== "") {
+          start = Math.max(0, stat.size - Number(match[2]));
+        } else {
+          start = Number(match[1] || 0);
+          if (match[2] !== "") end = Math.min(end, Number(match[2]));
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= stat.size) {
+          res.writeHead(416, { "content-range": `bytes */${stat.size}` }); res.end(); return;
+        }
+        status = 206;
+      }
+      const headers = {
         "content-type": types[ext] || "application/octet-stream",
         "cache-control": "public, max-age=31536000, immutable",
-        "content-length": stat.size,
-      });
-      const stream = createReadStream(mediaPath);
+        "accept-ranges": "bytes",
+        "content-length": end - start + 1,
+      };
+      if (status === 206) headers["content-range"] = `bytes ${start}-${end}/${stat.size}`;
+      res.writeHead(status, headers);
+      const stream = createReadStream(mediaPath, { start, end });
       stream.on("error", () => res.destroy());
       res.on("close", () => stream.destroy());
       stream.pipe(res);
