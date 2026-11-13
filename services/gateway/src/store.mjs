@@ -132,6 +132,7 @@ class Store {
   constructor() {
     this.messages = [];
     this.index = new Map();
+    this.positions = new Map();
     this.writeChain = Promise.resolve();
     this.seq = 0;
     this.trimmed = 0;
@@ -267,6 +268,7 @@ class Store {
 
   _rebuildIndex() {
     this.index = new Map();
+    this.positions.clear();
     for (const message of this.messages) this._index(message);
   }
 
@@ -275,6 +277,8 @@ class Store {
     const list = this.index.get(key) || [];
     list.push(message);
     this.index.set(key, list);
+    const positions = this.positions.get(key);
+    if (positions) positions.set(message.id, list.length - 1);
   }
 
   _trim() {
@@ -293,6 +297,9 @@ class Store {
         const at = list.findIndex((item) => item.id === message.id);
         if (at >= 0) list.splice(at, 1);
       }
+      // Indexes after the removal shift; invalidate lazily instead of
+      // rebuilding every id position on the trim path.
+      this.positions.delete(key);
       if (!list.length) this.index.delete(key);
     }
   }
@@ -314,7 +321,22 @@ class Store {
         message.profile === profile && message.conversation === conversation);
     }
     if (beforeId) {
-      const at = rows.findIndex((message) => message.id === beforeId);
+      let at = -1;
+      const directKey = targetId ? keyOf(profile, conversation, targetId) : "";
+      if (directKey && this.index.get(directKey) === rows) {
+        let positions = this.positions.get(directKey);
+        if (!positions) {
+          positions = new Map();
+          for (let position = 0; position < rows.length; position += 1) {
+            positions.set(rows[position].id, position);
+          }
+          this.positions.set(directKey, positions);
+        }
+        at = positions.get(beforeId) ?? -1;
+        if (at < 0) at = rows.findIndex((message) => message.id === beforeId);
+      } else {
+        at = rows.findIndex((message) => message.id === beforeId);
+      }
       if (at >= 0) {
         // Return only the page immediately before the anchor, not a copy of
         // the complete older history.

@@ -509,6 +509,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
               const reader = new FileReader();
               reader.onload = () => { setImage(String(reader.result || "")); setSendError(""); };
               reader.readAsDataURL(selected);
+              event.target.value = "";
               event.target.value = ""; // 允许再次选择同一个文件
             }}
           />
@@ -533,6 +534,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
                 setFileError("");
               };
               reader.readAsDataURL(selected);
+              event.target.value = "";
               event.target.value = ""; // 允许再次选择同一个文件
             }}
           />

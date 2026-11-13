@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.7 - 2026-11-13
+
+### 文档剩余优化整合
+
+- 前端高度索引替换为 round4 交付的 Fenwick 实现：
+  - append/prepend/update/locate/topAt 为 O(log n)。
+  - 1500 步随机差分测试与原模型一致。
+- 历史分页增加按会话的惰性 id→位置哈希索引，重复 beforeId 分页不再每次 findIndex。
+- Service Worker 安装改为逐资源 allSettled，单个图标缺失不再导致离线缓存整体失败。
+- 等待 Service Worker ready 后再继续启动。
+- 图片/文件选择后重置 input.value，可再次选择同一文件。
+
+### 未合并
+
+- 组提交、SQLite WAL、echo 关联、缩略图、请求指标、外部 store 仍未切换。
+- CI 工作流未推送到远端 main（Token 无 workflow 权限），保留在源码包。
+
 ## 0.2.6 - 2026-11-13
 
 ### 跨系统与全量测试整合

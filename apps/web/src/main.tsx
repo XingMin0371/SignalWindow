@@ -19,7 +19,9 @@ startSunlightClock();
 safeRemove("snowluma_window_token");
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sw.js")
+    .then(() => navigator.serviceWorker.ready)
+    .catch(() => {});
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

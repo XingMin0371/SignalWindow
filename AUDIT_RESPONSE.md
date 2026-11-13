@@ -71,3 +71,10 @@
 - 修复跨平台启动、SPA 回退、Content-Length、Host/Origin、Settings 回存、并发幂等、null parts、上游媒体段、锁心跳、握手超时、轻量版与老浏览器降级。
 - 移除未使用 zod；Node 门槛 >=18.18；Docker/CI 配置随源码交付。
 - GitHub Token 无 workflow 权限，CI 工作流未推送到 main，但保留在源码包。
+
+## v0.2.7 剩余优化
+
+- Fenwick O(log n) 高度索引已替换，随机差分测试通过。
+- 历史分页哈希索引已合入，分页与 trim 等价性测试通过。
+- SW 安装 allSettled、ready 等待、文件 input reset。
+- 组提交、SQLite、echo、缩略图、请求指标、外部 store 仍未合并。
