@@ -56,3 +56,10 @@
 - 静态 ETag/304、会话轮换/全端吊销。
 
 未切换：SQLite 后端、消息外部 store、CSP 收紧、文件魔数、CI/SAST。
+
+## v0.2.5 文档漏项收尾
+
+- 媒体 Range、可选媒体域名白名单、HTTPS `__Host` Cookie。
+- profile test 固定延迟，图片输入类型/大小提示。
+
+未做：任意 http(s) 默认域名收敛（需配置白名单才生效）、文件魔数、SQLite、CSP 收紧、Docker digest。
