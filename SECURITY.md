@@ -175,3 +175,5 @@ AstrBot 私聊历史导入必须由已登录用户在设置页勾选。服务端
 - `DATA_DIR/gateway.lock` 阻止两个网关进程共用同一数据目录；异常退出后旧 PID 会被检测并清理。
 - `REQUIRE_ORIGIN=1` 时才强制浏览器 Origin；默认允许无 Origin 的 CLI/WebView 客户端。
 - `TRUST_PROXY=1` 必须配合 `TRUSTED_PROXY_IPS`（支持 IPv4 和 CIDR）；否则不采信 XFF。
+- 可选 `MEDIA_HOST_ALLOWLIST` 限制远程媒体域名；留空保持现有兼容行为。
+- HTTPS 且可信代理下使用 `__Host-slw_session`，HTTP 继续使用 `slw_session`。
