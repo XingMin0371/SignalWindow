@@ -20,11 +20,12 @@
 
 ## 仍然存在的边界
 
-- 前端已接入常驻 `SqrtHeightIndex`，append/prepend/update 不再全量重建；消息数组的不可变追加仍会复制当前会话数组。
-- `/api/profiles` 的 Settings 保存仍逐 profile 写入并重连，未合并为一次事务。
+- 前端使用增量 `SqrtHeightIndex`，但块级重建仍是 O(块数)；尚未替换为 Fenwick O(log n) 版本，消息数组不可变追加仍会复制当前会话数组。
 - CSP 的 `connect-src`/`img-src` 仍保留 `ws:`/`https:` 兼容范围；没有做远程图片代理。
-- Cookie 仍使用 `SameSite=Strict`，没有 `__Host-` 前缀和全端吊销接口。
-- 未加入 CI、SAST、依赖持续扫描和真实浏览器 FPS/INP 门禁。
+- 文件内容魔数校验、NDJSON → SQLite WAL、Docker 基础镜像 digest 未实现。
+- 会话已有登录轮换和 `all=1` 吊销，但没有审计日志和自动化吊销策略。
+- `.github/workflows/ci.yml` 在源码包中；当前 GitHub Token 无 workflow 权限，未推送到远端 main。
+- 没有 SAST、依赖持续扫描和真实浏览器 FPS/INP 门禁。
 
 以上边界写在文档里，不把“已修复”扩大为“生产级全部达标”。
 
@@ -63,3 +64,10 @@
 - profile test 固定延迟，图片输入类型/大小提示。
 
 未做：任意 http(s) 默认域名收敛（需配置白名单才生效）、文件魔数、SQLite、CSP 收紧、Docker digest。
+
+## v0.2.6 round4 合入
+
+- 36/36 全量审计通过；内置 8/8；回归 5/5（TAP reporter）。
+- 修复跨平台启动、SPA 回退、Content-Length、Host/Origin、Settings 回存、并发幂等、null parts、上游媒体段、锁心跳、握手超时、轻量版与老浏览器降级。
+- 移除未使用 zod；Node 门槛 >=18.18；Docker/CI 配置随源码交付。
+- GitHub Token 无 workflow 权限，CI 工作流未推送到 main，但保留在源码包。
