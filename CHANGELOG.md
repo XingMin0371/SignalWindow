@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.5 - 2026-11-13
+
+### 文档漏项整合
+
+- 媒体响应支持单段 HTTP Range，音视频可拖动且大文件不再整段读取。
+- 新增可选 `MEDIA_HOST_ALLOWLIST`；留空保持原有兼容，不改变默认行为。
+- HTTPS + 可信代理下使用 `__Host-slw_session`，HTTP 继续使用 `slw_session`。
+- profile 测试端点增加固定最小等待，削弱端口探测时序差。
+- 图片选择增加 MIME 和大小提示，不再静默失败。
+
+### 仍未切换
+
+- NDJSON 仍是默认后端，SQLite WAL 未启用。
+- CSP 的 ws/https 范围、文件魔数、消息数组复制、Docker 摘要未改。
+
 ## 0.2.4 - 2026-11-13
 
 ### 低风险整合
