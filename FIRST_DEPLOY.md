@@ -283,3 +283,24 @@ docker compose -f infra/docker-compose.yml up -d --build
 config/upstreams.json
 data/
 ```
+
+## 平台入口
+
+Windows 首次启动优先双击 `START-WINDOWS.cmd`；Linux 使用 `bash start-linux.sh`；Android 只作为浏览器/PWA 客户端，见 `ANDROID.md`。
+
+## 可选：首次导入 AstrBot 私聊历史
+
+> 推荐在设置页的“历史导入”中选择私聊会话后导入：设置 → 历史导入 → 读取可导入私聊 → 勾选 → 导入选中私聊。这是显式选择，不会自动读取。下面的命令行仅作为无浏览器环境的后备方式。
+
+SignalWindow 默认只记录部署后经过自己的消息，不读取 AstrBot 数据库。需要查看旧私聊时，可在首次部署前做一次只读导入：
+
+```bash
+docker stop signal-window
+python3 scripts/import_astrbot_private.py \
+  --db /root/dsh-bots/astrbot/data/data_v4.db \
+  --data-dir /opt/signal-window-data \
+  --target-id 你的私聊QQ号
+docker start signal-window
+```
+
+脚本只查询 AstrBot `conversations` 中的私聊会话，SQLite 以 `mode=ro` 和 `query_only` 打开；不写 AstrBot 数据库，不导入群聊。写入先落到临时 NDJSON，再原子替换，并生成 `.astrbot-private-imported` 标记，重复启动不会重复导入。

@@ -3,11 +3,14 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzip, brotliCompress, constants as zlibConstants } from "node:zlib";
+import { promisify } from "node:util";
 import { WebSocketServer, WebSocket } from "ws";
 import { OneBotClient } from "./onebot.mjs";
-import { store } from "./store.mjs";
+import { store, MEDIA_DIR } from "./store.mjs";
 import { sanitizeParts } from "./message.mjs";
 import { loadProfiles, normalizeProfile, saveProfiles } from "./upstreams.mjs";
+import { importAvailable, importPrivateHistory, listPrivateSessions } from "./astrbot-import.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
@@ -25,6 +28,10 @@ let profiles = await loadProfiles();
 const profileMap = new Map();
 const onebots = new Map();
 const clients = new Set();
+const recentSendIds = new Map();
+const staticCache = new Map();
+const gzipAsync = promisify(gzip);
+const brotliAsync = promisify(brotliCompress);
 
 function publicProfile(profile) {
   return {
@@ -99,6 +106,18 @@ for (const profile of profiles) {
 }
 
 const authFailures = new Map();
+const apiRates = new Map();
+
+function apiRateLimited(req, limit = 120, windowMs = 10_000, bucket = "api") {
+  const ip = req.socket.remoteAddress || "unknown";
+  const key = `${bucket}:${ip}`;
+  const now = Date.now();
+  const recent = (apiRates.get(key) || []).filter((time) => now - time < windowMs);
+  if (recent.length >= limit) { apiRates.set(key, recent); return true; }
+  recent.push(now);
+  apiRates.set(key, recent);
+  return false;
+}
 function safeEqual(a, b) {
   const left = Buffer.from(String(a));
   const right = Buffer.from(String(b));
@@ -162,6 +181,8 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, expires] of sessions) if (expires < now) sessions.delete(id);
   for (const [key, times] of authFailures) if (!times.some((time) => now - time < 60_000)) authFailures.delete(key);
+  for (const [key, times] of apiRates) if (!times.some((time) => now - time < 10_000)) apiRates.delete(key);
+  for (const [clientId, at] of recentSendIds) if (now - at > 10 * 60_000) recentSendIds.delete(clientId);
 }, 10 * 60_000).unref();
 async function readJson(req) {
   let size = 0;
@@ -177,11 +198,16 @@ async function readJson(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   if (url.pathname.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
+  if (url.pathname.startsWith("/api/") && !url.pathname.startsWith("/api/media/") && apiRateLimited(req)) {
+    res.writeHead(429, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "too many requests" }));
+    return;
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   if (String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https") {
@@ -219,6 +245,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/api/profiles/test") {
+    if (apiRateLimited(req, 10, 60_000, "profile-test")) {
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "too many profile tests" }));
+      return;
+    }
     try {
       const body = await readJson(req);
       const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || body.token || "";
@@ -332,6 +363,42 @@ const server = http.createServer(async (req, res) => {
     }));
     return;
   }
+  if (url.pathname === "/api/import/sessions" && (req.method === "GET" || req.method === "POST")) {
+    if (!authorized(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (!importAvailable()) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "AstrBot 数据库未挂载" }));
+      return;
+    }
+    const allowed = [...new Set(profiles.flatMap((profile) => profile.privateUserIds || []))];
+    if (req.method === "GET") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ sessions: listPrivateSessions(allowed) }));
+      return;
+    }
+    try {
+      const body = await readJson(req);
+      const requested = Array.isArray(body.targets) ? body.targets.map(String) : [];
+      const selected = requested.filter((targetId) => allowed.includes(targetId));
+      let imported = 0;
+      for (const targetId of selected) {
+        const profile = profiles.find((item) => (item.privateUserIds || []).includes(targetId));
+        if (profile) imported += await importPrivateHistory({ store, profile, targetId });
+      }
+      broadcast({ type: "history-imported", count: imported, targets: selected });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, imported, targets: selected }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
   if (url.pathname === "/api/messages") {
     if (!authorized(req)) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -343,7 +410,39 @@ const server = http.createServer(async (req, res) => {
     const conversation = url.searchParams.get("conversation") === "group" ? "group" : "private";
     const targetId = profile ? resolveTarget(profile, conversation, url.searchParams.get("targetId")) : "";
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(profile && targetId ? store.list(profile.id, conversation, targetId, targetsFor(profile, conversation)[0]) : []));
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit")) || 40));
+    const beforeId = url.searchParams.get("beforeId") || "";
+    res.end(JSON.stringify(profile && targetId ? store.list(profile.id, conversation, targetId, targetsFor(profile, conversation)[0], limit, beforeId) : []));
+    return;
+  }
+
+  if (url.pathname.startsWith("/api/media/")) {
+    if (!authorized(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const name = decodeURIComponent(url.pathname.slice("/api/media/".length));
+    if (!/^[a-f0-9]{40}\.[a-z0-9]{1,8}$/i.test(name)) {
+      res.writeHead(404); res.end("not found"); return;
+    }
+    try {
+      const body = await fs.readFile(path.join(MEDIA_DIR, name));
+      const ext = path.extname(name).slice(1).toLowerCase();
+      const types = {
+        jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
+        webp: "image/webp", bmp: "image/bmp", mp3: "audio/mpeg", wav: "audio/wav",
+        ogg: "audio/ogg", mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+        pdf: "application/pdf", txt: "text/plain; charset=utf-8", json: "application/json; charset=utf-8",
+      };
+      res.writeHead(200, {
+        "content-type": types[ext] || "application/octet-stream",
+        "cache-control": "public, max-age=31536000, immutable",
+      });
+      res.end(body);
+    } catch {
+      res.writeHead(404); res.end("not found");
+    }
     return;
   }
 
@@ -354,7 +453,6 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(403); res.end(); return;
   }
   try {
-    const body = await fs.readFile(filePath);
     const ext = path.extname(filePath);
     const types = {
       ".html": "text/html; charset=utf-8",
@@ -366,15 +464,44 @@ const server = http.createServer(async (req, res) => {
       ".png": "image/png",
     };
     const immutable = filePath.includes(`${path.sep}assets${path.sep}`);
-    res.writeHead(200, {
+    const headers = {
       "content-type": types[ext] || "application/octet-stream",
       "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
-    });
+    };
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile()) {
+      res.writeHead(404); res.end("not found"); return;
+    }
+    const accepted = String(req.headers["accept-encoding"] || "");
+    const encoding = [".html", ".js", ".css", ".json", ".svg", ".webmanifest"].includes(ext) && stat.size >= 1024
+      ? (/(^|,)\s*br\b/i.test(accepted) ? "br" : /(^|,)\s*gzip\b/i.test(accepted) ? "gzip" : "")
+      : "";
+    const cacheKey = `${filePath}:${encoding}`;
+    const cached = staticCache.get(cacheKey);
+    let body;
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      body = cached.body;
+    } else {
+      body = await fs.readFile(filePath);
+      if (encoding === "br") {
+        body = await brotliAsync(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } });
+      } else if (encoding === "gzip") {
+        body = await gzipAsync(body, { level: 6 });
+      }
+      if (staticCache.size > 128) staticCache.clear();
+      staticCache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, body });
+    }
+    if (encoding) {
+      headers["content-encoding"] = encoding;
+      headers["vary"] = "Accept-Encoding";
+    }
+    res.writeHead(200, headers);
     res.end(body);
   } catch {
     res.writeHead(404); res.end("not found");
   }
 });
+server.on("connection", (socket) => socket.setNoDelay(true));
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;
 server.keepAliveTimeout = 5_000;
@@ -384,20 +511,38 @@ server.on("clientError", (error, socket) => {
   else socket.destroy();
 });
 
-const wss = new WebSocketServer({ noServer: true, maxPayload: 10 * 1024 * 1024, handleProtocols: (protocols) => { const list = protocols instanceof Set ? [...protocols] : protocols; return list.includes("signal-window") ? "signal-window" : false; } });
-function sendHistory(ws, profile, conversation, targetId) {
+const wss = new WebSocketServer({
+  noServer: true,
+  maxPayload: 10 * 1024 * 1024,
+  perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } },
+  handleProtocols: (protocols) => { const list = protocols instanceof Set ? [...protocols] : protocols; return list.includes("signal-window") ? "signal-window" : false; } });
+function sendHistory(ws, profile, conversation, targetId, beforeId = "", limit = 40, requestId = "") {
   const current = profileMap.get(profile);
   if (!current) return;
   const target = resolveTarget(current, conversation, targetId);
   if (!target) return;
+  const pageLimit = Math.max(1, Math.min(100, Number(limit) || 40));
+  const messages = store.list(profile, conversation, target, targetsFor(current, conversation)[0], pageLimit, String(beforeId || ""));
   ws.send(JSON.stringify({
     type: "history",
     profile,
     conversation,
     targetId: target,
-    messages: store.list(profile, conversation, target, targetsFor(current, conversation)[0]),
+    prepend: Boolean(beforeId),
+    hasMore: messages.length >= pageLimit,
+    requestId,
+    messages,
   }));
 }
+const wsHeartbeat = setInterval(() => {
+  for (const ws of clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  }
+}, 30_000);
+wsHeartbeat.unref();
+
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url, "http://localhost");
   const ip = req.socket.remoteAddress || "unknown";
@@ -421,7 +566,9 @@ server.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {
     clients.add(ws);
     ws.remoteAddress = ip;
+    ws.isAlive = true;
     ws.messageWindow = [];
+    ws.on("pong", () => { ws.isAlive = true; });
     ws.on("close", () => clients.delete(ws));
     ws.on("message", async (raw) => {
       const now = Date.now();
@@ -435,13 +582,26 @@ server.on("upgrade", (req, socket, head) => {
       try { payload = JSON.parse(raw.toString()); } catch { return; }
       if (payload.type === "history") {
         const profile = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
-        if (profile) sendHistory(ws, profile, payload.conversation === "group" ? "group" : "private", payload.targetId);
+        if (profile) sendHistory(
+          ws,
+          profile,
+          payload.conversation === "group" ? "group" : "private",
+          payload.targetId,
+          payload.beforeId,
+          payload.limit,
+          payload.requestId,
+        );
         return;
       }
       if (payload.type !== "send") return;
+      const clientId = String(payload.clientId || "");
+      if (clientId && recentSendIds.has(clientId)) {
+        ws.send(JSON.stringify({ type: "ack", clientId }));
+        return;
+      }
       const profileId = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
       if (!profileId) {
-        ws.send(JSON.stringify({ type: "error", detail: "尚未配置 AstrBot" }));
+        ws.send(JSON.stringify({ type: "error", clientId, detail: "尚未配置 AstrBot" }));
         return;
       }
       const parts = sanitizeParts(
@@ -450,36 +610,39 @@ server.on("upgrade", (req, socket, head) => {
           : [{ type: "text", text: String(payload.text ?? "") }],
       );
       if (!parts.length) {
-        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: "empty message" }));
+        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: "empty message" }));
         return;
       }
       const conversation = payload.conversation === "group" ? "group" : "private";
       const current = profileMap.get(profileId);
       const targetId = resolveTarget(current, conversation, payload.targetId);
       if (!targetId) {
-        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: "会话对象未配置" }));
+        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: "会话对象未配置" }));
         return;
       }
-      const message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
+      let message;
+      try {
+        message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
+      } catch (error) {
+        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
+        return;
+      }
       broadcast({ type: "message", message });
       try {
         await onebots.get(profileId).send({ conversation, targetId, parts });
       } catch (error) {
-        ws.send(JSON.stringify({ type: "error", profile: profileId, detail: error.message }));
+        ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
+        return;
       }
+      if (clientId) recentSendIds.set(clientId, Date.now());
+      ws.send(JSON.stringify({ type: "ack", clientId }));
     });
     ws.send(JSON.stringify({
       type: "hello",
       profiles: [...profileMap.values()].map(publicProfile),
       onebots: Object.fromEntries([...onebots].map(([id, client]) => [id, client.connected])),
     }));
-    for (const profile of profiles) {
-      for (const conversation of ["private", "group"]) {
-        for (const targetId of targetsFor(profile, conversation)) {
-          sendHistory(ws, profile.id, conversation, targetId);
-        }
-      }
-    }
+    // History is loaded lazily by the browser for the selected conversation only.
   });
 });
 
@@ -487,11 +650,14 @@ await store.init();
 server.listen(PORT, HOST, () => {
   console.log(`signal-window gateway http://${HOST}:${PORT}`);
   console.log(`profiles ${profiles.map((p) => `${p.id}->${p.wsUrl}`).join(", ") || "none; waiting for setup"}`);
+  if (process.env.ALLOW_QUERY_TOKEN === "1") {
+    console.warn("SECURITY WARNING: ALLOW_QUERY_TOKEN=1 puts the gateway token in URLs and proxy logs; use the HttpOnly session cookie or Authorization header instead.");
+  }
 });
 
 async function shutdown() {
   for (const client of onebots.values()) client.stop();
-  await store.flush().catch((error) => console.error("store flush failed", error));
+  await store.close().catch((error) => console.error("store flush failed", error));
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 }

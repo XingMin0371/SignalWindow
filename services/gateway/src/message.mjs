@@ -19,7 +19,7 @@ export function normalizeMessage(message) {
       const data = raw.data && typeof raw.data === "object" ? raw.data : {};
       let url = String(data.url ?? data.file ?? raw.url ?? "");
       if (url.startsWith("base64://")) url = `data:image/png;base64,${url.slice(9)}`;
-      if (url && url.length <= 7_000_000) parts.push({ type: "image", url, alt: String(data.summary ?? "图片").slice(0, 100) });
+      if (url && url.length <= 7_000_000 && !/^data:image\/svg/i.test(url)) parts.push({ type: "image", url, alt: String(data.summary ?? "图片").slice(0, 100) });
       else if (raw.type === "mface") parts.push({ type: "face", name: String(data.summary ?? "表情").slice(0, 50) });
       continue;
     }
@@ -94,13 +94,13 @@ export function sanitizeParts(parts) {
       if (text) out.push(textPart(text));
     } else if (part.type === "image") {
       const url = String(part.url ?? "");
-      if (url.length <= 2_000_000 && /^(https?:\/\/|data:image\/)/i.test(url)) {
+      if (url.length <= 2_000_000 && /^(https?:\/\/|data:image\/(?:png|jpe?g|gif|webp|bmp)[;,])/i.test(url)) {
         out.push({ type: "image", url, alt: String(part.alt ?? "图片").slice(0, 100) });
       }
     } else if (part.type === "file") {
       const url = String(part.url ?? "");
       const name = String(part.name ?? "文件").slice(0, 120);
-      if (name && url.length <= 7_000_000 && /^(https?:\/\/|data:(?:application|text|image|audio|video|font)\/|data:application\/octet-stream)/i.test(url)) {
+      if (name && url.length <= 7_000_000 && /^(https?:\/\/|data:(?:application|image|audio|video|font)\/(?!svg)|data:text\/(?!html))/i.test(url)) {
         out.push({ type: "file", name, url, mime: String(part.mime ?? "").slice(0, 100), size: Number(part.size) || undefined });
       }
     } else if (part.type === "face") {

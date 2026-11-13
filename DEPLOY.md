@@ -288,3 +288,14 @@ reply, text
 - 登录使用 HttpOnly 会话 Cookie，不写入 localStorage。
 - 一个 Gateway Token 可以访问该网关下的全部 profile；多人使用请分别部署。
 - 远程图片可能产生第三方请求，敏感环境建议使用可信图片源。
+
+## 多端入口
+
+```text
+Windows：START-WINDOWS.cmd
+Linux：  bash start-linux.sh
+Docker： cd infra && docker compose up -d --build
+Android：浏览器/PWA，见 ANDROID.md
+```
+
+系统矩阵和 APK 说明见 `COMPATIBILITY.md`、`ANDROID.md`。

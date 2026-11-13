@@ -11,6 +11,8 @@ export default defineConfig({
     },
   },
   build: {
+    target: ["es2017", "safari12"],
+    cssTarget: ["chrome64", "safari12"],
     outDir: "dist",
     sourcemap: false,
     chunkSizeWarningLimit: 900,
@@ -18,7 +20,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           react: ["react", "react-dom", "react-router-dom"],
-          refine: ["@refinedev/core", "@refinedev/react-router"],
           antd: ["antd", "@ant-design/icons"],
           flow: ["@xyflow/react"],
           editor: ["@uiw/react-codemirror", "@codemirror/lang-json"],

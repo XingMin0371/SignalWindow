@@ -284,3 +284,37 @@ profile + conversation + targetId
 
 - 本地构建：[LOCAL_BUILD.md](LOCAL_BUILD.md)
 - 首次部署：[FIRST_DEPLOY.md](FIRST_DEPLOY.md)
+
+## 聊天外观与背景
+
+设置页支持三种低功耗样式：
+
+```text
+默认
+玻璃（半透明 CSS，不使用实时 backdrop-filter）
+透明
+```
+
+支持本地上传聊天背景：
+
+```text
+静态图片：浏览器端压缩后存入 IndexedDB
+动态视频：MP4/WebM，建议不超过 8 秒、1280×720、8MB
+动态播放默认关闭；切后台自动暂停
+Lite 模式会隐藏动态背景
+```
+
+背景只保存在当前浏览器，不会自动上传服务器。
+
+## 多端启动
+
+```text
+Windows：双击 START-WINDOWS.cmd
+Linux：  bash start-linux.sh
+Docker： cd infra && docker compose up -d --build
+Android：浏览器访问，参考 ANDROID.md；PWA 不需要 APK
+```
+
+首次启动会运行 `scripts/setup.mjs`。需要 Node.js 24+ 和 pnpm。Android 不运行服务端，只作为浏览器/PWA 客户端。
+
+兼容性矩阵见 [COMPATIBILITY.md](COMPATIBILITY.md)，规范与安全边界见 [STANDARDS.md](STANDARDS.md)。

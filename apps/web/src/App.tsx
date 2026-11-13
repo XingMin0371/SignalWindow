@@ -1,9 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Refine } from "@refinedev/core";
-import routerProvider from "@refinedev/react-router";
 import { App as AntApp, Button, ConfigProvider, Form, Input, Layout, Menu, Modal, Space, Tag, Typography, message, theme } from "antd";
-import { ApiOutlined, DashboardOutlined, NodeIndexOutlined, SettingOutlined, BugOutlined, MessageOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
+import { ApiOutlined, NodeIndexOutlined, SettingOutlined, BugOutlined, MessageOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { api } from "./api";
 import type { Config } from "./types";
 const SOURCE_URL = "https://github.com/XingMin0371/SignalWindow";
@@ -15,14 +13,7 @@ const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const DiagnosticsPage = lazy(() => import("./pages/DiagnosticsPage"));
 
 const { Header, Sider, Content } = Layout;
-const dataProvider: any = {
-  getList: async () => ({ data: [], total: 0 }),
-  getOne: async () => ({ data: {} }),
-  create: async () => ({ data: {} }),
-  update: async () => ({ data: {} }),
-  deleteOne: async () => ({ data: {} }),
-  getApiUrl: () => "/api",
-};
+
 
 function Shell({ config, reload }: { config: Config; reload: () => Promise<void> }) {
   const items = [
@@ -175,9 +166,7 @@ export default function App() {
     }}>
       <AntApp>
         <BrowserRouter>
-          <Refine dataProvider={dataProvider} routerProvider={routerProvider} resources={[{ name: "profiles", list: "/profiles" }]}>
-            <Shell config={config} reload={reload} />
-          </Refine>
+          <Shell config={config} reload={reload} />
         </BrowserRouter>
 
         <Modal className="setup-modal" open={authOpen} title="网关登录" footer={null} closable={false}>

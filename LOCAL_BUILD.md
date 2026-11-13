@@ -195,3 +195,7 @@ Ctrl+F5
 ```
 
 或在开发者工具里清除站点数据。
+
+## 兼容性构建目标
+
+Vite 生产目标为 ES2017 与 Safari 12 基线。React 18/Ant Design 5 仍有自己的浏览器下限；旧设备建议开启 Lite 模式和静态背景。详见 `COMPATIBILITY.md`。

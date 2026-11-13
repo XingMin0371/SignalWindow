@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import { normalizeMessage, partsToText, toOneBotMessage } from "./message.mjs";
+import { normalizeMessage } from "./message.mjs";
+import { buildOneBotMessageEvent } from "./onebot-payload.mjs";
 
 export class OneBotClient extends EventEmitter {
   constructor(config) {
@@ -10,7 +11,6 @@ export class OneBotClient extends EventEmitter {
     this.connected = false;
     this.reconnectTimer = null;
     this.stopped = false;
-    this.sequence = 0;
     this.reconnectAttempt = 0;
     this.onReply = config.onReply;
   }
@@ -147,25 +147,14 @@ export class OneBotClient extends EventEmitter {
     const allowed = messageType === "group" ? this.config.groupIds : this.config.privateUserIds;
     const resolved = String(targetId || allowed[0] || "");
     if (!allowed.includes(resolved)) throw new Error("target not allowed");
-    const payload = {
-      post_type: "message",
-      message_type: messageType,
-      self_id: Number(this.config.selfId),
-      message_id: this.nextId(),
-      time: Math.floor(Date.now() / 1000),
-      message: toOneBotMessage(parts),
-      raw_message: partsToText(parts),
-      sender: {
-        user_id: messageType === "private"
-          ? Number(resolved)
-          : Number(this.config.privateUserIds[0] || this.config.selfId),
-        nickname: "Signal Window",
-      },
-      ...(messageType === "group"
-        ? { group_id: Number(resolved) }
-        : { user_id: Number(resolved) }),
-    };
-    if (!payload.message.length) throw new Error("empty message");
+    const payload = buildOneBotMessageEvent({
+      selfId: this.config.selfId,
+      messageType,
+      targetId: resolved,
+      messageId: this.nextId(),
+      privateUserId: this.config.privateUserIds[0] || this.config.selfId,
+      parts,
+    });
     this.ws.send(JSON.stringify(payload));
     return payload;
   }

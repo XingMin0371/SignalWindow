@@ -16,6 +16,11 @@ export function normalizeProfile(raw, index = 0) {
   if (!["ws:", "wss:"].includes(parsed.protocol)) throw new Error("OneBot WS 地址必须是 ws:// 或 wss://");
   if (wsUrl.length > 2048 || parsed.username || parsed.password) throw new Error("OneBot WS 地址不合法");
   const host = parsed.hostname.toLowerCase();
+  const allowedHosts = String(process.env.UPSTREAM_HOST_ALLOWLIST || "")
+    .split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  if (allowedHosts.length && !allowedHosts.includes(host)) {
+    throw new Error("OneBot WS 主机不在 UPSTREAM_HOST_ALLOWLIST 中");
+  }
   if (host === "169.254.169.254" || host === "metadata.google.internal" || host === "metadata.azure.internal" || host === "0.0.0.0" || host.startsWith("169.254.") || host === "fd00:ec2::254") {
     throw new Error("不允许连接云元数据地址");
   }

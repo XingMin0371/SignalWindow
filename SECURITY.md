@@ -141,3 +141,31 @@ Docker Desktop 自身需要虚拟化/服务权限
 https://github.com/XingMin0371/SignalWindow
 
 v0.1.0 仍按 MIT 授权，不能追溯撤销。完整许可证见 `LICENSE`，选择理由见 `LICENSE_AUDIT.md`，依赖许可见 `THIRD_PARTY_NOTICES.md`。
+
+## 上游与代理安全
+
+- `UPSTREAM_HOST_ALLOWLIST` 可限制 OneBot WS 目标主机，设置后只允许列表中的主机。
+- 不要在生产环境开启 `ALLOW_QUERY_TOKEN=1`；它会把网关 Token 放进 URL 和代理日志。
+- 媒体上传目前限制单文件大小，但长期运行仍应设置磁盘配额和清理策略。
+- 图片 data URL 仅接受常见位图 MIME，拒绝 SVG；文件 data URL 拒绝 HTML/SVG。
+
+## 聊天背景
+
+用户上传的聊天背景保存在浏览器 IndexedDB，不会自动上传网关。静态图片在浏览器端压缩；动态视频限制大小、时长和分辨率，默认不自动播放，切后台暂停。Lite 模式关闭动态背景。
+
+规范映射和已知边界见 `STANDARDS.md`，浏览器/系统矩阵见 `COMPATIBILITY.md`。
+
+## 本地 blob 资源
+
+用户上传的聊天背景使用浏览器本地 `blob:` URL。CSP 只对同源图片和本地 blob 放行：
+
+```text
+img-src ... blob:
+media-src 'self' blob:
+```
+
+不会把 `blob:` 加入脚本或网络连接白名单。背景数据只保存在当前浏览器 IndexedDB。
+
+## 历史导入
+
+AstrBot 私聊历史导入必须由已登录用户在设置页勾选。服务端只挂载 AstrBot 数据目录为只读，接口只接受配置中已存在的私聊 target；群聊不导入。默认不会自动导入。

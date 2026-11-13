@@ -1,4 +1,4 @@
-const CACHE = "signal-window-v1";
+const CACHE = "signal-window-v2";
 const CORE = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
