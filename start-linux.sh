@@ -1,30 +1,6 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Signal Window 统一启动器：POSIX sh，兼容 BusyBox / Alpine / Android Termux（无需 bash）。
+# 具体逻辑在 scripts/start.mjs，用 Node 实现，避免 shell 方言与 CRLF shebang 问题。
+set -eu
 cd "$(dirname "$0")"
-
-if ! command -v node >/dev/null 2>&1; then
-  echo "[Signal Window] Node.js 24+ is required."
-  exit 1
-fi
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-if [ "$NODE_MAJOR" -lt 24 ]; then
-  echo "[Signal Window] Node.js 24+ is required; found $(node -v)."
-  exit 1
-fi
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "[Signal Window] pnpm is required. Run: corepack enable"
-  exit 1
-fi
-
-if [ ! -f .env ]; then
-  echo "[Signal Window] First run: creating .env and config/upstreams.json"
-  node scripts/setup.mjs
-fi
-
-if [ ! -f apps/web/dist/index.html ]; then
-  echo "[Signal Window] Building web client..."
-  (cd apps/web && pnpm install && pnpm run build)
-fi
-
-pnpm install
-exec pnpm start
+exec "${NODE_BIN:-node}" scripts/start.mjs "$@"

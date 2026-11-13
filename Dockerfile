@@ -19,4 +19,4 @@ ENV HOST=0.0.0.0
 ENV PORT=8787
 EXPOSE 8787
 USER node
-CMD ["node", "services/gateway/src/index.mjs"]
+CMD ["node", "scripts/start.mjs", "--no-open"]

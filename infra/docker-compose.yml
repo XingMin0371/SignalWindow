@@ -11,10 +11,13 @@ services:
       HOST: 0.0.0.0
       GATEWAY_TOKEN: ${GATEWAY_TOKEN:?请在 .env 中设置 GATEWAY_TOKEN}
       PORT: "8787"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
       DATA_DIR: /app/data
       UPSTREAMS_FILE: /app/config/upstreams.json
     ports:
-      - "127.0.0.1:8787:8787"
+      - "${BIND_ADDR:-127.0.0.1}:8787:8787"
     volumes:
       - window-data:/app/data
       - ../config:/app/config

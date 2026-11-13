@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import net from "node:net";
+import { resolveFromRoot } from "./env.mjs";
 
 function normalizedHost(hostname) {
   return hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -95,7 +96,7 @@ export function normalizeProfile(raw, index = 0) {
 }
 
 export function configPath() {
-  return path.resolve(process.env.UPSTREAMS_FILE || "config/upstreams.json");
+  return resolveFromRoot(process.env.UPSTREAMS_FILE, "config/upstreams.json");
 }
 
 export async function loadProfiles() {
@@ -133,6 +134,12 @@ export async function saveProfiles(profiles) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   await fs.writeFile(temporary, JSON.stringify({ profiles }, null, 2), { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temporary, file);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { await fs.rename(temporary, file); break; }
+    catch (error) {
+      if (!["EPERM", "EACCES", "EBUSY"].includes(error.code) || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
   await fs.chmod(file, 0o600).catch(() => {});
 }

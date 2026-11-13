@@ -34,7 +34,7 @@ export class OneBotClient extends EventEmitter {
     };
     if (this.config.accessToken) headers.Authorization = `Bearer ${this.config.accessToken}`;
     this.emit("status", { profile: this.config.id, label: this.config.label, connected: false, detail: "connecting" });
-    const ws = new WebSocket(this.config.wsUrl, { headers, maxPayload: 2 * 1024 * 1024 });
+    const ws = new WebSocket(this.config.wsUrl, { headers, maxPayload: 2 * 1024 * 1024, handshakeTimeout: 10_000 });
     this.ws = ws;
 
     ws.on("open", () => {
@@ -92,7 +92,8 @@ export class OneBotClient extends EventEmitter {
         const segments = Array.isArray(params.message)
           ? params.message.map((item) => `${item?.type || "?"}:${item?.data?.file ? "file" : item?.data?.url ? "url" : ""}`).join(",")
           : typeof params.message;
-        console.log("[onebot-action]", String(action).replace(/[\r\n]/g, " "), messageType, String(segments).slice(0, 200).replace(/[\r\n]/g, " "));
+        const cleanLog = (value) => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+        console.log("[onebot-action]", cleanLog(action), cleanLog(messageType), cleanLog(segments).slice(0, 200));
       }
       if (action === "send_private_msg" || action === "send_group_msg" || action === "send_msg") {
         const parts = normalizeMessage(params.message);

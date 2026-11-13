@@ -3,19 +3,31 @@ import { createReadStream } from "node:fs";
 import readline from "node:readline";
 import path from "node:path";
 import crypto from "node:crypto";
+import { resolveFromRoot } from "./env.mjs";
 import { partsToText } from "./message.mjs";
 
-const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
+const DATA_DIR = resolveFromRoot(process.env.DATA_DIR, "data");
 const FILE = path.join(DATA_DIR, "messages.ndjson");
 const LEGACY_FILE = path.join(DATA_DIR, "messages.json");
 export const MEDIA_DIR = path.join(DATA_DIR, "media");
-const MAX_MESSAGES = Number(process.env.MAX_MESSAGES || 4000);
+function envInt(name, fallback, min, max) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    console.error(`[config] ${name} 必须是 ${min}..${max} 的整数，收到 ${JSON.stringify(raw)}`);
+    process.exit(2);
+  }
+  return value;
+}
+const MAX_MESSAGES = envInt("MAX_MESSAGES", 4000, 1, 10_000_000);
 const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = Number(process.env.MAX_MESSAGE_BYTES || 256 * 1024);
 const MAX_RAW_MESSAGE_BYTES = Number(process.env.MAX_RAW_MESSAGE_BYTES || 12 * 1024 * 1024);
-const MAX_MEDIA_TOTAL_BYTES = Number(process.env.MAX_MEDIA_TOTAL_BYTES || 512 * 1024 * 1024);
-const MAX_MEDIA_FILES = Number(process.env.MAX_MEDIA_FILES || 5000);
-const COMPACT_EVERY_TRIMS = Number(process.env.COMPACT_EVERY_TRIMS || 500);
+const MAX_MEDIA_TOTAL_BYTES = envInt("MAX_MEDIA_TOTAL_BYTES", 512 * 1024 * 1024, 1, Number.MAX_SAFE_INTEGER);
+const MAX_MEDIA_FILES = envInt("MAX_MEDIA_FILES", 5000, 1, 10_000_000);
+const COMPACT_EVERY_TRIMS = envInt("COMPACT_EVERY_TRIMS", 500, 1, 10_000_000);
+const LOCK_STALE_MS = 5 * 60 * 1000;
 const LOCK_FILE = path.join(DATA_DIR, "gateway.lock");
 
 const mediaState = { bytes: 0, files: 0, checkedAt: 0 };
@@ -131,6 +143,11 @@ class Store {
   async init() {
     await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
     await this._acquireLock();
+    // 心跳刷新锁的 mtime；另一实例据此区分「存活」与「崩溃后 PID 被复用的陈旧锁」。
+    this.lockHeartbeat = setInterval(() => {
+      fs.utimes(LOCK_FILE, new Date(), new Date()).catch(() => {});
+    }, 30_000);
+    this.lockHeartbeat.unref();
     await fs.mkdir(MEDIA_DIR, { recursive: true, mode: 0o700 });
     await fs.chmod(DATA_DIR, 0o700).catch(() => {});
     await fs.chmod(MEDIA_DIR, 0o700).catch(() => {});
@@ -190,6 +207,12 @@ class Store {
         return;
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
+        // 陈旧锁优先按时间判定，避免 Windows 上 PID 复用导致永久无法启动。
+        const stat = await fs.stat(LOCK_FILE).catch(() => null);
+        if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+          await fs.unlink(LOCK_FILE).catch(() => {});
+          continue;
+        }
         let owner = 0;
         try { owner = Number((await fs.readFile(LOCK_FILE, "utf8")).trim()); } catch {}
         let alive = false;
@@ -204,6 +227,7 @@ class Store {
   }
 
   async _releaseLock() {
+    if (this.lockHeartbeat) { clearInterval(this.lockHeartbeat); this.lockHeartbeat = null; }
     if (!this.lockHandle) return;
     try { await this.lockHandle.close(); } catch {}
     this.lockHandle = null;

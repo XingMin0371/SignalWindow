@@ -65,7 +65,7 @@ export function normalizeMessage(message) {
       if (safe) parts.push({ type: "file", url: safe, name, mime: String(data.mime ?? "").slice(0, 100) });
       continue;
     }
-    if (raw.type === "face" || raw.type === "mface") {
+    if (raw.type === "face") {
       parts.push({ type: "face", name: String(raw.data?.name ?? raw.data?.summary ?? "表情") });
       continue;
     }
@@ -102,6 +102,12 @@ export function toOneBotMessage(parts) {
       out.push({ type: "file", data: { file: part.url, url: part.url, name: part.name || "文件" } });
     } else if (part.type === "face") {
       out.push({ type: "face", data: { name: part.name || "表情" } });
+    } else if (part.type === "audio" && part.url) {
+      out.push({ type: "record", data: { file: part.url } });
+    } else if (part.type === "video" && part.url) {
+      out.push({ type: "video", data: { file: part.url } });
+    } else if (part.type === "mention" && part.userId) {
+      out.push({ type: "at", data: { qq: part.userId } });
     }
   }
   return out;
@@ -110,6 +116,7 @@ export function toOneBotMessage(parts) {
 export function sanitizeParts(parts) {
   const out = [];
   for (const part of parts || []) {
+    if (!part || typeof part !== "object") continue;
     if (part.type === "text") {
       const text = String(part.text ?? "").slice(0, 10000);
       if (text) out.push(textPart(text));

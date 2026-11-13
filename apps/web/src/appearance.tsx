@@ -16,6 +16,17 @@ const THEME_KEY = "signal_theme";
 const DYNAMIC_KEY = "signal_background_dynamic";
 const FIT_KEY = "signal_background_fit";
 const CHAT_ASPECT_KEY = "signal_chat_aspect";
+function fileToArrayBuffer(file: File): Promise<ArrayBuffer> {
+  // File.arrayBuffer() 是 Chrome 76+/Safari 14+；旧设备用 FileReader 兜底。
+  if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 const DB_NAME = "signal_window_appearance";
 const STORE_NAME = "background";
 const RECORD_KEY = "chat";
@@ -94,7 +105,8 @@ export async function loadStoredBackground(): Promise<StoredBackground | null> {
 }
 
 export async function saveStoredBackground(value: StoredBackground): Promise<void> {
-  const db = await openDatabase();
+  let db: IDBDatabase;
+  try { db = await openDatabase(); } catch { throw new Error("当前浏览器不支持本地背景存储"); }
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readwrite");
@@ -109,7 +121,8 @@ export async function saveStoredBackground(value: StoredBackground): Promise<voi
 }
 
 export async function removeStoredBackground(): Promise<void> {
-  const db = await openDatabase();
+  let db: IDBDatabase;
+  try { db = await openDatabase(); } catch { return; }
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readwrite");
@@ -142,7 +155,7 @@ export async function compressBackgroundImage(file: File): Promise<Blob> {
     if (!context) throw new Error("浏览器不支持图片压缩");
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", 0.78));
-    return blob || new Blob([await file.arrayBuffer()], { type: file.type || "image/jpeg" });
+    return blob || new Blob([await fileToArrayBuffer(file)], { type: file.type || "image/jpeg" });
   } finally {
     URL.revokeObjectURL(sourceUrl);
   }

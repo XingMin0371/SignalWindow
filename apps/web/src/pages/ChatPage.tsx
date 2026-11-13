@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { Badge, Button, Empty, Image, Input, Select, Space, Spin, Tag, Typography } from "antd";
 import { FileAddOutlined, PictureOutlined, SendOutlined } from "@ant-design/icons";
 import type { Message, MessagePart, Profile } from "../types";
-import { safeGet, safeSet } from "../storage";
+import { safeGet, safeGetDraft, safeSetDraft } from "../storage";
 import { BackgroundSurface, rememberChatAspect } from "../appearance";
 import { SqrtHeightIndex } from "../heightIndex";
 
@@ -109,10 +109,10 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     if (!draftKey) return;
     if (draftKeyRef.current !== draftKey) {
       draftKeyRef.current = draftKey;
-      setText(safeGet(draftKey) || "");
+      setText(safeGetDraft(draftKey) || "");
       return;
     }
-    safeSet(draftKey, text);
+    safeSetDraft(draftKey, text);
   }, [draftKey, text]);
 
   useEffect(() => {
@@ -145,6 +145,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
         if (pending) ws.send(JSON.stringify(pending.payload));
       };
 
+      ws.onerror = () => { setConnected(false); };
       ws.onclose = () => {
         setConnected(false);
         if (disposed) return;
@@ -328,6 +329,10 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
     if (indexedKeyRef.current !== key || ids.length < known.length) {
       index.reset();
       for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
+    } else if (ids.length === known.length && !known.every((id, position) => ids[position] === id)) {
+      // 同 key、同长度但内容被整页替换时，旧索引的 id 会与 visible 错位。
+      index.reset();
+      for (const message of visible) index.append(message.id, heightsRef.current.get(message.id) || ROW_HEIGHT);
     } else if (ids.length > known.length) {
       const prefixSame = known.every((id, position) => ids[position] === id);
       const suffixSame = known.every((id, position) => ids[position + ids.length - known.length] === id);
@@ -504,6 +509,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
               const reader = new FileReader();
               reader.onload = () => { setImage(String(reader.result || "")); setSendError(""); };
               reader.readAsDataURL(selected);
+              event.target.value = ""; // 允许再次选择同一个文件
             }}
           />
           <PictureOutlined />
@@ -527,6 +533,7 @@ export default function ChatPage({ profiles }: { profiles: Profile[] }) {
                 setFileError("");
               };
               reader.readAsDataURL(selected);
+              event.target.value = ""; // 允许再次选择同一个文件
             }}
           />
           <FileAddOutlined />

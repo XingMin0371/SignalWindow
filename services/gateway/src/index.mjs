@@ -1,3 +1,4 @@
+import "./env.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,6 +7,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzip, brotliCompress, constants as zlibConstants } from "node:zlib";
 import { promisify } from "node:util";
+import net from "node:net";
+import { resolveFromRoot } from "./env.mjs";
 import { WebSocketServer, WebSocket } from "ws";
 import { OneBotClient } from "./onebot.mjs";
 import { store, MEDIA_DIR } from "./store.mjs";
@@ -15,7 +18,17 @@ import { importAvailable, importPrivateHistory, listPrivateSessions } from "./as
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "../../../apps/web/dist");
-const PORT = Number(process.env.PORT || 8787);
+function envInt(name, fallback, min, max) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    console.error(`[config] ${name} 必须是 ${min}..${max} 的整数，收到 ${JSON.stringify(raw)}`);
+    process.exit(2);
+  }
+  return value;
+}
+const PORT = envInt("PORT", 8787, 0, 65535);
 const HOST = process.env.HOST || "127.0.0.1";
 const TOKEN = process.env.GATEWAY_TOKEN || "";
 const TRUST_PROXY = process.env.TRUST_PROXY === "1";
@@ -25,8 +38,10 @@ const SESSION_COOKIE_SECURE = "__Host-slw_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const sessions = new Map();
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "").split(",").map((v) => v.trim()).filter(Boolean);
-const MAX_CLIENTS = Number(process.env.MAX_CLIENTS || 100);
-const MAX_CLIENTS_PER_IP = Number(process.env.MAX_CLIENTS_PER_IP || 20);
+const MAX_CLIENTS = envInt("MAX_CLIENTS", 100, 1, 100000);
+const MAX_CLIENTS_PER_IP = envInt("MAX_CLIENTS_PER_IP", 20, 1, 100000);
+const EXTRA_HOSTS = String(process.env.ALLOWED_HOSTS || "").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+const WS_DEFLATE = process.env.WS_DEFLATE === "1";
 
 let profiles = await loadProfiles();
 const profileMap = new Map();
@@ -103,8 +118,13 @@ function startClient(profile) {
 }
 function addProfile(raw) {
   const existing = profileMap.get(String(raw?.id || ""));
-  const sameEndpoint = existing && String(raw.wsUrl || "") === String(existing.wsUrl || "");
-  const input = existing && sameEndpoint && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
+  const wsUrl = raw?.wsUrl === undefined ? existing?.wsUrl : raw?.wsUrl;
+  const keepToken = existing && (raw?.accessToken === undefined || raw?.accessToken === "");
+  const input = {
+    ...raw,
+    wsUrl,
+    accessToken: keepToken ? existing.accessToken : (raw?.accessToken ?? ""),
+  };
   const profile = normalizeProfile(input, profileMap.size);
   profileMap.set(profile.id, profile);
   profiles = [...profileMap.values()];
@@ -116,8 +136,13 @@ async function replaceProfiles(rawProfiles) {
   const ids = new Set();
   const next = rawProfiles.map((raw, index) => {
     const existing = profileMap.get(String(raw?.id || ""));
-    const sameEndpoint = existing && String(raw?.wsUrl || "") === String(existing.wsUrl || "");
-    const input = existing && sameEndpoint && !raw.accessToken ? { ...raw, accessToken: existing.accessToken } : raw;
+    const wsUrl = raw?.wsUrl === undefined ? existing?.wsUrl : raw?.wsUrl;
+    const keepToken = existing && (raw?.accessToken === undefined || raw?.accessToken === "");
+    const input = {
+      ...raw,
+      wsUrl,
+      accessToken: keepToken ? existing.accessToken : (raw?.accessToken ?? ""),
+    };
     const profile = normalizeProfile(input, index);
     if (ids.has(profile.id)) throw new Error(`重复的 profile id: ${profile.id}`);
     ids.add(profile.id);
@@ -263,6 +288,21 @@ function authorized(req) {
   const supplied = req.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
   return safeEqual(supplied, TOKEN);
 }
+/**
+ * Host 允许清单：默认放行 localhost 与所有 IP 字面量（保留局域网/Android 直连），
+ * 拒绝未登记的域名，从根上阻断 DNS rebinding（域名解析到 127.0.0.1 后变同源）。
+ * 自定义域名用 ALLOWED_HOSTS=example.com,foo.local 显式登记。
+ */
+function hostAllowed(req) {
+  const raw = String(req.headers.host || "");
+  if (!raw) return false;
+  let hostname = raw;
+  try { hostname = new URL("http://" + raw).hostname; } catch { return false; }
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (net.isIP(host)) return true;
+  return EXTRA_HOSTS.includes(host);
+}
 function originAllowed(req) {
   const origin = String(req.headers.origin || "");
   // Non-browser clients do not send Origin. Keep them working unless the
@@ -283,14 +323,30 @@ async function readJson(req) {
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 128 * 1024) throw new Error("request too large");
+    if (size > 128 * 1024) { const error = new Error("request too large"); error.status = 413; throw error; }
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+function writeError(res, error) {
+  const status = Number(error && error.status) || 400;
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: String(error && error.message || error) }));
+}
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (!hostAllowed(req)) {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Host not allowed");
+    return;
+  }
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && !originAllowed(req)) {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "origin not allowed" }));
+    return;
+  }
   if (url.pathname.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
   if (url.pathname.startsWith("/api/") && !url.pathname.startsWith("/api/media/") && apiRateLimited(req)) {
     res.writeHead(429, { "content-type": "application/json" });
@@ -326,8 +382,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify({ ok: true }));
     } catch (error) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error.message }));
+      writeError(res, error);
     }
     return;
   }
@@ -413,8 +468,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, profiles: next.map(publicProfile) }));
     } catch (error) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error.message }));
+      writeError(res, error);
     }
     return;
   }
@@ -440,8 +494,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, profile: publicProfile(profile) }));
     } catch (error) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error.message }));
+      writeError(res, error);
     }
     return;
   }
@@ -516,8 +569,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, imported, targets: selected }));
     } catch (error) {
-      res.writeHead(400, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: error.message }));
+      writeError(res, error);
     }
     return;
   }
@@ -601,6 +653,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+  try { filePath = decodeURIComponent(filePath); } catch { /* 非法百分号编码：保留原串，由 404 处理 */ }
   filePath = path.resolve(PUBLIC_DIR, `.${filePath}`);
   const relative = path.relative(PUBLIC_DIR, filePath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -652,13 +705,29 @@ const server = http.createServer(async (req, res) => {
       staticCache.set(cacheKey, { mtimeMs: stat.mtimeMs, size: stat.size, body });
     }
     if (encoding) headers["content-encoding"] = encoding;
+    headers["content-length"] = body.length;
     res.writeHead(200, headers);
     res.end(body);
   } catch {
+    // SPA 深链接回退：BrowserRouter 的 /chat /settings 等刷新时必须返回 index.html。
+    const isPage = !path.extname(url.pathname) || String(req.headers.accept || "").includes("text/html");
+    if (isPage) {
+      try {
+        const body = await fs.readFile(path.join(PUBLIC_DIR, "index.html"));
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", "content-length": body.length });
+        res.end(body);
+        return;
+      } catch {}
+    }
     res.writeHead(404); res.end("not found");
   }
 });
 server.on("connection", (socket) => socket.setNoDelay(true));
+// 监听失败必须以非 0 退出：退出码 0 会被 Docker restart:unless-stopped 当成正常结束。
+server.on("error", (error) => {
+  console.error("[fatal:listen] " + error.message);
+  process.exit(1);
+});
 server.headersTimeout = 10_000;
 server.requestTimeout = 15_000;
 server.keepAliveTimeout = 5_000;
@@ -671,7 +740,7 @@ server.on("clientError", (error, socket) => {
 const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 10 * 1024 * 1024,
-  perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } },
+  perMessageDeflate: WS_DEFLATE ? { threshold: 1024, zlibDeflateOptions: { level: 3 } } : false,
   handleProtocols: (protocols) => { const list = protocols instanceof Set ? [...protocols] : protocols; return list.includes("signal-window") ? "signal-window" : false; } });
 function sendHistory(ws, profile, conversation, targetId, beforeId = "", limit = 40, requestId = "") {
   const current = profileMap.get(profile);
@@ -704,7 +773,7 @@ server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url, "http://localhost");
   const ip = clientIp(req);
   const ipCount = [...clients].filter((client) => client.remoteAddress === ip).length;
-  if (clients.size >= MAX_CLIENTS || ipCount >= MAX_CLIENTS_PER_IP || !originAllowed(req)) {
+  if (clients.size >= MAX_CLIENTS || ipCount >= MAX_CLIENTS_PER_IP || !hostAllowed(req) || !originAllowed(req)) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
@@ -729,6 +798,7 @@ server.on("upgrade", (req, socket, head) => {
     ws.messageWindow = [];
     ws.on("pong", () => { ws.isAlive = true; });
     ws.on("close", () => clients.delete(ws));
+    ws.on("error", () => clients.delete(ws));
     ws.on("message", async (raw) => {
       const now = Date.now();
       ws.messageWindow = ws.messageWindow.filter((time) => now - time < 10_000);
@@ -739,6 +809,7 @@ server.on("upgrade", (req, socket, head) => {
       ws.messageWindow.push(now);
       let payload;
       try { payload = JSON.parse(raw.toString()); } catch { return; }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
       if (payload.type === "history") {
         const profile = profileMap.has(payload.profile) ? payload.profile : profiles[0]?.id;
         if (profile) sendHistory(
@@ -783,10 +854,13 @@ server.on("upgrade", (req, socket, head) => {
         ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: "会话对象未配置" }));
         return;
       }
+      // 幂等键必须在任何 await 之前占用，否则同一 clientId 的并发帧会重复落盘。
+      if (clientId) recentSendIds.set(clientId, Date.now());
       let message;
       try {
         message = await store.add({ profile: profileId, conversation, targetId, role: "user", parts, source: "web" });
       } catch (error) {
+        if (clientId) recentSendIds.delete(clientId);
         ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
         return;
       }
@@ -794,10 +868,10 @@ server.on("upgrade", (req, socket, head) => {
       try {
         await onebots.get(profileId).send({ conversation, targetId, parts });
       } catch (error) {
+        if (clientId) recentSendIds.delete(clientId);
         ws.send(JSON.stringify({ type: "error", clientId, profile: profileId, detail: error.message }));
         return;
       }
-      if (clientId) recentSendIds.set(clientId, Date.now());
       ws.send(JSON.stringify({ type: "ack", clientId }));
     });
     ws.send(JSON.stringify({

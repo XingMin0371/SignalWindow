@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal Window · 轻量版</title>
+<style>
+html,body{margin:0;padding:0;height:100%;background:#0d1117;color:#eef4f2;font-family:Arial,"Microsoft YaHei",sans-serif;font-size:15px}
+#bar{padding:8px 10px;background:#111619;border-bottom:1px solid #293238}
+#bar span{color:#8e9b9b;font-size:12px}
+#log{position:absolute;top:44px;bottom:64px;left:0;right:0;overflow-y:auto;padding:10px;-webkit-overflow-scrolling:touch}
+.row{margin:0 0 10px;padding:8px 10px;border:1px solid #293238;border-radius:8px;background:#151d20;word-wrap:break-word;word-break:break-word}
+.row.me{background:#1b2620;border-color:#3d5c3d}
+.meta{color:#8e9b9b;font-size:11px;margin-bottom:4px}
+#form{position:absolute;bottom:0;left:0;right:0;height:56px;padding:8px;background:#111619;border-top:1px solid #293238;box-sizing:border-box}
+#text{width:75%;height:38px;padding:6px 8px;box-sizing:border-box;border:1px solid #293238;border-radius:6px;background:#0b0f11;color:#eef4f2;font-size:16px}
+#send{width:20%;height:38px;background:#d6ff4b;color:#080a0c;border:0;border-radius:6px;font-weight:bold;font-size:14px}
+#tip{color:#8e9b9b;font-size:11px;padding:4px 10px}
+</style>
+</head>
+<body>
+<div id="bar"><strong>Signal Window</strong> <span id="state">连接中…</span></div>
+<div id="log"></div>
+<div id="tip">轻量版：仅文本消息，适用于旧浏览器与低内存设备。<a href="/" style="color:#7fe7ff">返回完整版</a></div>
+<form id="form"><input id="text" autocomplete="off" placeholder="输入消息"><button id="send" type="submit">发送</button></form>
+<script>
+/* ES5，无框架、无构建、无 polyfill；兼容 Chrome 16+/Safari 6+/Android 4.4+ WebView */
+(function () {
+  var log = document.getElementById("log");
+  var state = document.getElementById("state");
+  var input = document.getElementById("text");
+  var tip = document.getElementById("tip");
+  var ws = null, retry = 0, timer = null, seq = 0, atBottom = true;
+  var current = { profile: "", conversation: "private", targetId: "" };
+
+  function esc(s) { var d = document.createElement("div"); d.appendChild(document.createTextNode(String(s))); return d.innerHTML; }
+  function addRow(m) {
+    var row = document.createElement("div");
+    row.className = "row" + (m.role === "user" ? " me" : "");
+    var when = "";
+    try { when = new Date(m.time).toLocaleTimeString(); } catch (e) { when = ""; }
+    var text = "";
+    var parts = m.parts || [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (p.type === "text") text += p.text;
+      else if (p.type === "image") text += "[图片]";
+      else if (p.type === "file") text += "[文件]";
+      else if (p.type === "audio") text += "[语音]";
+      else if (p.type === "video") text += "[视频]";
+      else if (p.type === "face") text += "[表情]";
+      else if (p.type === "mention") text += "@" + p.userId;
+    }
+    if (!text) text = m.text || "";
+    row.innerHTML = '<div class="meta">' + esc(m.role === "user" ? "我" : "AstrBot") + " · " + esc(when) + "</div>" +
+                    '<div class="body">' + esc(text).replace(/\n/g, "<br>") + "</div>";
+    var shouldStick = atBottom || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    log.appendChild(row);
+    while (log.childNodes.length > 300) log.removeChild(log.firstChild);
+    if (shouldStick) log.scrollTop = log.scrollHeight;
+  }
+  log.onscroll = function () { atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80; };
+
+  function requestHistory() {
+    if (!current.profile || !current.targetId) return;
+    ws.send(JSON.stringify({ type: "history", profile: current.profile, conversation: current.conversation,
+                             targetId: current.targetId, limit: 40, requestId: String(++seq) }));
+  }
+  function connect() {
+    var proto = location.protocol === "https:" ? "wss:" : "ws:";
+    try { ws = new WebSocket(proto + "//" + location.host + "/ws", "signal-window"); }
+    catch (e) { schedule(); return; }
+    ws.onopen = function () { retry = 0; state.innerHTML = "已连接"; };
+    ws.onclose = function () { state.innerHTML = "已断开，重连中…"; schedule(); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = function (ev) {
+      var p; try { p = JSON.parse(ev.data); } catch (e) { return; }
+      if (p.type === "hello") {
+        var list = p.profiles || [];
+        if (list.length) {
+          current.profile = list[0].id;
+          var ids = list[0].privateUserIds || (list[0].privateUserId ? [list[0].privateUserId] : []);
+          current.targetId = ids[0] || "";
+          tip.innerHTML = "会话：" + esc(list[0].label || current.profile) + " · <a href='/' style='color:#7fe7ff'>完整版</a>";
+          requestHistory();
+        } else { state.innerHTML = "尚未配置实例"; }
+      } else if (p.type === "history") {
+        log.innerHTML = "";
+        var msgs = p.messages || [];
+        for (var i = 0; i < msgs.length; i++) addRow(msgs[i]);
+        log.scrollTop = log.scrollHeight;
+      } else if (p.type === "message") {
+        var m = p.message;
+        if (m.profile === current.profile && m.targetId === current.targetId && m.conversation === current.conversation) addRow(m);
+      } else if (p.type === "gap") { requestHistory(); }
+      else if (p.type === "error") { state.innerHTML = esc(p.detail || "发送失败"); }
+    };
+  }
+  function schedule() {
+    if (timer) return;
+    var delay = Math.min(30000, 1000 * Math.pow(2, retry++)) + Math.floor(Math.random() * 400);
+    timer = setTimeout(function () { timer = null; connect(); }, delay);
+  }
+  document.getElementById("form").onsubmit = function (e) {
+    e.preventDefault();
+    var text = input.value.replace(/^\s+|\s+$/g, "");
+    if (!text || !ws || ws.readyState !== 1 || !current.profile || !current.targetId) return;
+    ws.send(JSON.stringify({ type: "send", clientId: "lite-" + Date.now() + "-" + (++seq),
+      profile: current.profile, conversation: current.conversation, targetId: current.targetId,
+      parts: [{ type: "text", text: text }] }));
+    input.value = "";
+  };
+  connect();
+})();
+</script>
+</body>
+</html>

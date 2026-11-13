@@ -1,5 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
+
+// node:sqlite 只在 Node 22.5+ 存在。历史导入是可选功能，不能让它阻断网关启动。
+let DatabaseSync = null;
+try { ({ DatabaseSync } = await import("node:sqlite")); } catch { DatabaseSync = null; }
 
 const DB_PATH = process.env.ASTRBOT_DB || "";
 const PLATFORM = process.env.ASTRBOT_PLATFORM || "snowluma";
@@ -7,7 +10,7 @@ const REMINDER = /<system_reminder>[\s\S]*?<\/system_reminder>/g;
 const DATETIME_HINT = /Current datetime:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})/;
 
 function openDatabase() {
-  if (!DB_PATH || !existsSync(DB_PATH)) return null;
+  if (!DatabaseSync || !DB_PATH || !existsSync(DB_PATH)) return null;
   const db = new DatabaseSync(DB_PATH, { readOnly: true });
   db.exec("PRAGMA query_only = ON");
   return db;
@@ -40,7 +43,7 @@ function readScore(row) {
 }
 
 export function importAvailable() {
-  return Boolean(DB_PATH && existsSync(DB_PATH));
+  return Boolean(DatabaseSync && DB_PATH && existsSync(DB_PATH));
 }
 
 export function listPrivateSessions(allowedTargets) {

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.6 - 2026-11-13
+
+### 跨系统与全量测试整合
+
+- 合入 round4 补丁：36 项全量用例从 31 项缺陷降到 0，36/36 通过。
+- 全仓 LF + `.gitattributes`，命令行入口改为 Node 启动器，Node 门槛降至 >=18.18。
+- SPA 深链接回退、静态 Content-Length、Host/Origin 校验、413/启动退出码。
+- 修复 Settings JSON 回存丢 wsUrl/Token、并发 clientId 重复落盘、null parts、上游媒体段丢失。
+- 可选 `node:sqlite`、非交互 setup、陈旧锁心跳、上游握手超时、轻量版 `lite.html`。
+- 移除未使用的 zod，修复 CSS 变量/老浏览器降级、文件输入重置等问题。
+
+### 验证
+
+- 自有测试 8/8；round4 全量 36/36；回归 5 项中 4 项通过，测试解析项因本机没有 npm 命令显示 pass=0，但 `node --test` 实际 8/8。
+- 前端 TypeScript、Vite build 通过。
+
 ## 0.2.5 - 2026-11-13
 
 ### 文档漏项整合
@@ -19,7 +35,7 @@
 
 ### 低风险整合
 
-- gap 事件改为当前会话历史重同步，不再刷新页面；输入草稿用 sessionStorage 恢复。
+- gap 事件改为当前会话历史重同步，不再刷新页面；输入草稿用 sessionStorage 恢复（v0.2.5 补丁已落地）。
 - Origin 校验支持 `REQUIRE_ORIGIN=1`，默认保留无 Origin 的 CLI/WebView 兼容。
 - 可信代理 IP 归一化、IPv4 CIDR 支持和启动告警。
 - DATA_DIR 单实例锁，处理容器 PID1 复用导致的陈旧锁。

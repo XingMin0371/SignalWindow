@@ -4,7 +4,7 @@ data/
 *.log
 config/upstreams.json
 
-CON
 .env*
 *.bak
 config/*.bak
+apps/web/dist/

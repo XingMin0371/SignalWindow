@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=.env services/gateway/src/index.mjs",
+    "start": "node scripts/start.mjs",
+    "start:bare": "node services/gateway/src/index.mjs",
     "mock": "node scripts/mock-astr.mjs",
-    "dev": "node --env-file-if-exists=.env --watch services/gateway/src/index.mjs",
+    "dev": "node --watch services/gateway/src/index.mjs",
     "test": "node --test tests/*.test.mjs",
     "setup": "node scripts/setup.mjs"
   },
@@ -14,7 +15,7 @@
   },
   "license": "AGPL-3.0-only",
   "engines": {
-    "node": ">=24"
+    "node": ">=18.18"
   },
-  "version": "0.2.5"
+  "version": "0.2.6"
 }

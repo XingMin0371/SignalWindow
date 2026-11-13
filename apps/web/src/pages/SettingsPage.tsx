@@ -158,7 +158,7 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
   }
 
   async function clearBackground() {
-    await removeStoredBackground();
+    try { await removeStoredBackground(); } catch (error) { message.error(String(error)); return; }
     setBackground(null);
     setBackgroundUrl("");
     message.success("已恢复默认背景");
@@ -293,7 +293,7 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
                     accept="image/*,video/mp4,video/webm"
                     hidden
                     disabled={backgroundBusy}
-                    onChange={(event) => chooseBackground(event.target.files?.[0])}
+                    onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; void chooseBackground(picked); }}
                   />
                   {backgroundBusy ? "处理中…" : "上传背景"}
                 </label>
