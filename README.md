@@ -69,7 +69,7 @@ snowluma:GroupMessage:<GROUP_ID>
 
 ## 安装
 
-需要 Node.js 24+：
+需要 Node.js 18.18+（推荐 20/22 LTS）：
 
 ```bash
 pnpm install
@@ -79,6 +79,8 @@ pnpm run build
 cd ../..
 node scripts/setup.mjs
 pnpm start
+# 或直接使用统一启动器（会自动检查依赖和构建）：
+node scripts/start.mjs
 ```
 
 `setup.mjs` 会生成 `.env` 和 `config/upstreams.json`，不需要修改源码。
@@ -315,6 +317,6 @@ Docker： cd infra && docker compose up -d --build
 Android：浏览器访问，参考 ANDROID.md；PWA 不需要 APK
 ```
 
-首次启动会运行 `scripts/setup.mjs`。需要 Node.js 24+ 和 pnpm。Android 不运行服务端，只作为浏览器/PWA 客户端。
+首次启动会运行 `scripts/setup.mjs`。需要 Node.js 18.18+（推荐 20/22 LTS） 和 pnpm。Android 不运行服务端，只作为浏览器/PWA 客户端。
 
 兼容性矩阵见 [COMPATIBILITY.md](COMPATIBILITY.md)，规范与安全边界见 [STANDARDS.md](STANDARDS.md)。

@@ -7,7 +7,7 @@
 需要：
 
 ```text
-Node.js 24 或更高
+Node.js 18.18+ 或更高
 pnpm 9 或更高
 ```
 

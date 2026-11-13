@@ -35,7 +35,10 @@ export function once(event, handler) {
 }
 
 export function off(event, handler) {
-  listeners.get(event)?.delete(handler);
+  const set = listeners.get(event);
+  if (!set) return;
+  set.delete(handler);
+  if (!set.size) listeners.delete(event);
 }
 
 export function emit(event, payload) {

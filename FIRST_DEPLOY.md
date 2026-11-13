@@ -7,7 +7,7 @@
 需要：
 
 ```text
-Node.js 24（裸机部署）
+Node.js 18.18+（裸机部署，推荐 20/22 LTS）
 或 Docker + Docker Compose
 一个 AstrBot
 AstrBot 已启用 aiocqhttp / OneBot v11

@@ -299,3 +299,23 @@ Android：浏览器/PWA，见 ANDROID.md
 ```
 
 系统矩阵和 APK 说明见 `COMPATIBILITY.md`、`ANDROID.md`。
+
+## 6. Docker 非 root 与反向代理
+
+Dockerfile 以 `node` 用户运行。使用 Compose 的绑定目录挂载时，宿主机 `config/` 必须允许该用户写入：
+
+```bash
+sudo chown -R 1000:1000 config
+```
+
+或者先以只读方式启动，进入网页设置向导后再调整权限。
+
+启用 Caddy 或其它反向代理时：
+
+```text
+TRUST_PROXY=1
+TRUSTED_PROXY_IPS=<代理容器固定 IP 或宿主机网段/CIDR>
+ALLOWED_HOSTS=<实际访问域名>
+```
+
+只有可信代理来源才会采信 `X-Forwarded-For` / `X-Forwarded-Proto`；否则使用直连 IP，Secure Cookie 和 HSTS 不会误判。
