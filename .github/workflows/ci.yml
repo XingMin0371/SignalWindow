@@ -36,10 +36,12 @@ jobs:
           const fs=require('fs');
           const pkg=JSON.parse(fs.readFileSync('apps/web/package.json','utf8'));
           const lock=fs.readFileSync('apps/web/pnpm-lock.yaml','utf8');
+          const has=(name)=>{
+            const esc=name.replace(/[.*+?^\${}()|[\]\\]/g,'\\$&');
+            return new RegExp('(^|\\n)\\s+[\"\']?'+esc+'[\"\']?:','m').test(lock);
+          };
           for (const name of Object.keys(pkg.dependencies||{})) {
-            if (!lock.includes('      '+name+':') && !lock.includes('      \"'+name+'\":')) {
-              console.error('锁文件缺少依赖声明: '+name); process.exit(1);
-            }
+            if (!has(name)) { console.error('锁文件缺少依赖声明: '+name); process.exit(1); }
           }
           console.log('锁文件与 package.json 依赖声明一致');
           "
