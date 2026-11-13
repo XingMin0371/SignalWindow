@@ -342,6 +342,8 @@ export default function SettingsPage({ profiles }: { profiles: Profile[] }) {
         open={cropOpen}
         title="自定义裁切"
         width={680}
+        maskClosable={false}
+        keyboard={false}
         onCancel={() => setCropOpen(false)}
         footer={[
           <Button key="reset" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }}>重置</Button>,
